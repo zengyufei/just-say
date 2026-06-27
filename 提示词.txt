@@ -1,0 +1,152 @@
+请实现一个 Windows 系统托盘语音输入法应用，使用 Rust 开发，目标平台为 Windows 10/11 amd64，优先适配 Windows 11。
+
+应用目标：
+按住一个全局热键开始录音，松开后将转录文字注入当前聚焦的输入框。默认热键不要强依赖 Fn 键，因为 Windows 上 Fn 键通常由键盘固件处理，系统无法稳定捕获。请实现可配置的 Press-to-Talk 热键，默认建议使用 CapsLock 或 Right Ctrl；如果检测环境支持 Fn 扫描码，可作为高级选项启用，否则自动降级到可检测热键。
+
+核心要求：
+
+1. 全局按键监听
+   - 使用 Windows Low-Level Keyboard Hook，例如 WH_KEYBOARD_LL，或 Raw Input 实现全局监听。
+   - 支持“按住录音、松开结束”的交互。
+   - 默认热键可配置，至少支持 CapsLock、Right Ctrl、Right Alt、Ctrl+Space。
+   - 尽量抑制被选中的热键事件继续传递，避免触发系统或应用原有快捷键。
+   - 明确处理 Fn 键限制：Fn 不保证可监听，不作为默认热键。
+
+2. 语音录制与转录
+   - 使用 Rust 音频库采集麦克风输入，推荐 cpal。
+   - 采样格式统一转换为 16kHz 或 24kHz mono PCM，便于 STT 后端处理。
+   - 默认识别语言必须为简体中文 zh-CN，确保开箱即用偏向中文识别。
+   - 提供语言切换选项：英语 en-US、简体中文 zh-CN、繁体中文 zh-TW、日语 ja-JP、韩语 ko-KR。
+   - 语言选择保存到本地配置文件，例如 AppData/Roaming 下的 TOML/JSON 配置，或 Windows Registry。
+   - 转录后端设计为可插拔：
+     - 优先支持 OpenAI 兼容的 audio transcription API。
+     - 可选支持本地 whisper.cpp / whisper-rs 后端。
+     - 如果实现流式转录，应设计 streaming STT 接口；如果当前后端不支持流式，则录音结束后一次性转录。
+   - UI 在录音过程中应能显示实时音频 RMS 驱动的波形；如果 STT 后端支持 partial transcript，则实时显示 partial transcript。
+
+3. 系统托盘应用
+   - 应用以系统托盘形式运行，不显示普通主窗口，不出现在任务栏。
+   - 可使用 tray-icon、tao、winit、windows-rs 或 native Win32 API。
+   - 托盘菜单包含：
+     - 当前状态
+     - 语言选择：English、简体中文、繁體中文、日本語、한국어
+     - 热键设置入口
+     - LLM Refinement 子菜单
+     - Settings
+     - Quit
+   - 需要支持开机自启动选项，可通过 Startup 文件夹或 Registry Run key 实现。
+
+4. 录音悬浮窗
+   - 录音时在屏幕底部居中显示一个精致、无边框、非激活、置顶的胶囊状悬浮窗。
+   - 使用 Win32 layered window / no-activate window 实现，推荐窗口样式：
+     - WS_POPUP
+     - WS_EX_TOPMOST
+     - WS_EX_TOOLWINDOW
+     - WS_EX_NOACTIVATE
+     - WS_EX_LAYERED
+   - 不应抢占当前应用焦点。
+   - 支持高 DPI，能在多显示器环境下显示在当前鼠标所在屏幕或当前前台窗口所在屏幕底部。
+   - 胶囊高度 56px，圆角半径 28px。
+   - 背景使用半透明磨砂/亚克力风格；可通过 DWM、Acrylic、Mica 或自绘半透明背景实现，无法使用系统材质时使用高质量半透明背景 fallback。
+   - 内容包括：
+     - 左侧 5 根竖条波形动画，区域 44×32px。
+     - 波形必须由实时音频 RMS 电平驱动，不允许写死假动画。
+     - 五根竖条权重为 [0.5, 0.8, 1.0, 0.75, 0.55]。
+     - 使用平滑包络：attack 40%，release 15%。
+     - 每根竖条添加 ±4% 随机抖动，使动画更自然。
+     - 安静时波形较小，说话声音大时波形明显变大，必须清晰可见。
+     - 右侧文字标签实时显示转录文本或状态。
+     - 文字区域弹性宽度 160-560px，胶囊随文字变多平滑变宽。
+   - 动画要求：
+     - 入场弹簧动画约 0.35s。
+     - 文字宽度平滑过渡约 0.25s。
+     - 退场缩放淡出动画约 0.22s。
+
+5. 文本注入
+   - 使用剪贴板 + 模拟 Ctrl+V 的方式向当前聚焦输入框注入文字。
+   - 注入前保存当前剪贴板内容，注入完成后恢复。
+   - 使用 Windows Clipboard API，不要简单依赖命令行工具。
+   - 使用 SendInput 模拟 Ctrl+V。
+   - 注入前检测当前输入法/键盘布局：
+     - 如果当前是 CJK IME，例如中文、日文、韩文输入法，临时切换到英文/US 键盘布局后再粘贴。
+     - 粘贴完成后恢复原输入法。
+   - 可使用 GetKeyboardLayout、ActivateKeyboardLayout、ImmGetContext、ImmGetOpenStatus、ImmSetOpenStatus 等 Win32/IMM32 API。
+   - 必须尽量避免中文输入法拦截 Ctrl+V 或将粘贴内容进入组合态。
+   - 对失败情况做降级处理：如果无法切换输入法，也要尝试粘贴，并记录日志。
+
+6. LLM Refinement
+   - 接入 OpenAI 兼容 Chat Completions API，用于提升语音识别文本准确率，尤其是中英文混杂内容。
+   - API 配置项：
+     - API Base URL
+     - API Key
+     - Model
+   - LLM refine 是可选功能，默认可以关闭或首次运行未配置。
+   - 如果已启用且配置完整，松开热键后：
+     - 先完成 STT。
+     - 悬浮窗显示 “Refining...”。
+     - 调用 LLM refine。
+     - LLM 返回后注入最终文本。
+   - 如果 LLM 调用失败，回退注入原始转录文本，并显示简短错误状态。
+   - system prompt 必须非常保守，内容类似：
+
+     你是一个极其保守的语音识别纠错器。你的任务不是改写、润色、总结或补全文本。只修复明显的语音识别错误，尤其是中文谐音错误、标点明显错误、以及英文技术术语被错误识别成中文的问题，例如“配森”应改为“Python”，“杰森”应改为“JSON”，“扣的”在编程上下文中可能应为“code”。如果输入文本看起来已经正确，必须原样返回。不要删除任何看起来正确的内容。不要改变语气、风格、语序或含义。只输出纠正后的文本，不要解释。
+
+7. Settings 窗口
+   - 托盘菜单提供 LLM Refinement 子菜单：
+     - Enable / Disable
+     - Settings
+   - Settings 窗口包含：
+     - API Base URL 输入框
+     - API Key 输入框
+     - Model 输入框
+     - Test 按钮
+     - Save 按钮
+   - API Key 输入框必须允许完全清空。
+   - Test 按钮应调用一个轻量测试请求，显示成功或失败。
+   - Save 后写入本地配置。
+   - API Key 建议使用 Windows Credential Manager 或 DPAPI 加密保存；如果实现复杂，可以先使用 DPAPI 加密后的本地配置文件。
+
+8. 工程与构建
+   - 使用 Rust stable。
+   - 目标架构：x86_64-pc-windows-msvc。
+   - 使用 Cargo workspace 或单 crate 均可。
+   - 推荐依赖：
+     - windows 或 windows-sys：Win32 API
+     - cpal：音频采集
+     - serde / serde_json / toml：配置
+     - reqwest：HTTP API
+     - tokio：异步任务
+     - tray-icon：系统托盘
+     - winit/tao 或 native Win32：悬浮窗与设置窗口
+     - arboard 或 Win32 Clipboard API：剪贴板，但最终注入逻辑应能可靠处理 Unicode 文本
+   - 提供 Makefile 或 PowerShell 构建脚本，包含：
+     - build
+     - run
+     - install
+     - clean
+     - package
+   - 构建产物为 Windows .exe，并提供可选安装目录。
+   - 如需安装器，可使用 WiX Toolset、NSIS 或 cargo-wix。
+   - 应包含应用图标、版本信息、manifest。
+   - manifest 需要声明 per-monitor DPI awareness。
+   - 不要求管理员权限运行；全局键盘 hook、剪贴板、SendInput 应在普通用户权限下工作。
+   - 注意 Windows 安全软件可能对全局键盘 hook 敏感，需要代码签名和清晰说明。
+
+9. 日志与错误处理
+   - 使用 tracing 或 log/env_logger。
+   - 日志写入 AppData/Local 下的应用日志目录。
+   - 对以下情况给出清晰错误：
+     - 麦克风权限不可用
+     - 找不到输入设备
+     - STT API 未配置或失败
+     - LLM API 未配置或失败
+     - 剪贴板被其他应用占用
+     - 输入法切换失败
+     - 热键不可监听，尤其是 Fn 键不可用
+
+10. 重要实现约束
+   - 不要假设 Fn 键可被 Windows 捕获。
+   - 不要实现假的波形动画，波形必须由真实麦克风 RMS 数据驱动。
+   - 不要让悬浮窗抢焦点。
+   - 不要在 LLM refine 中改写用户原意。
+   - 不要在注入完成后破坏用户原剪贴板内容。
