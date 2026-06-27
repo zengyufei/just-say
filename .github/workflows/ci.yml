@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TARGET: x86_64-pc-windows-msvc
+
+jobs:
+  rust:
+    name: Check, test, and build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add $env:RUST_TARGET
+
+      - name: Restore Cargo dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        shell: pwsh
+        run: cargo fmt --all --check
+
+      - name: Check
+        shell: pwsh
+        run: cargo check --locked --target $env:RUST_TARGET
+
+      - name: Test
+        shell: pwsh
+        run: cargo test --locked --target $env:RUST_TARGET
+
+      - name: Build
+        shell: pwsh
+        run: cargo build --release --locked --target $env:RUST_TARGET

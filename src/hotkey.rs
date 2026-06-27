@@ -9,7 +9,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, PostMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT,
-    LLKHF_EXTENDED, WH_KEYBOARD_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    LLKHF_EXTENDED, LLKHF_INJECTED, WH_KEYBOARD_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN,
+    WM_SYSKEYUP,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -143,13 +144,19 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
         return 1;
     }
 
-    update_key_state(&mut state.keys, kb.vkCode, is_down, is_up);
+    let key_vk = effective_vk(kb);
+    let injected = (kb.flags & LLKHF_INJECTED) != 0;
+    update_key_state(&mut state.keys, key_vk, is_down, is_up);
 
-    let matched_down = matches_hotkey(&state.hotkey, kb, is_down, state.keys);
-    let matched_up = matches_hotkey(&state.hotkey, kb, is_up, state.keys);
+    if injected && !state.active {
+        return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
+    }
+
+    let matched_down = matches_hotkey(&state.hotkey, kb, key_vk, is_down, state.keys);
+    let matched_up = matches_hotkey(&state.hotkey, kb, key_vk, is_up, state.keys);
     let no_longer_matches = state.active
-        && is_hotkey_relevant_event(&state.hotkey, kb)
-        && !hotkey_conditions_met(&state.hotkey, state.keys, kb);
+        && is_hotkey_relevant_event(&state.hotkey, kb, key_vk)
+        && !hotkey_conditions_met(&state.hotkey, state.keys, key_vk);
 
     if matched_down && !state.active {
         state.active = true;
@@ -161,7 +168,7 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -
         let _ = state.sender.send(HotkeyEvent::Released);
         return 1;
     }
-    if state.active && should_suppress_while_active(&state.hotkey, kb) {
+    if state.active && should_suppress_while_active(&state.hotkey, kb, key_vk) {
         return 1;
     }
     CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
@@ -180,7 +187,7 @@ fn handle_capture_event(
         return false;
     };
     let key = KeySpec {
-        vk: kb.vkCode,
+        vk: effective_vk(kb),
         scan_code: kb.scanCode,
         extended: (kb.flags & LLKHF_EXTENDED) != 0,
     };
@@ -228,63 +235,90 @@ fn finish_capture(state: &mut HookState, hwnd: isize, hotkey: Option<Hotkey>, re
     }
 }
 
-fn matches_hotkey(hotkey: &Hotkey, kb: &KBDLLHOOKSTRUCT, phase: bool, keys: KeyState) -> bool {
+fn matches_hotkey(
+    hotkey: &Hotkey,
+    kb: &KBDLLHOOKSTRUCT,
+    key_vk: u32,
+    phase: bool,
+    keys: KeyState,
+) -> bool {
     if !phase {
         return false;
     }
     match hotkey {
-        Hotkey::RightCtrl => kb.vkCode == VK_RCONTROL as u32,
-        Hotkey::CapsLock => kb.vkCode == VK_CAPITAL as u32,
-        Hotkey::RightAlt => kb.vkCode == VK_RMENU as u32,
-        Hotkey::CtrlSpace => keys.ctrl && kb.vkCode == VK_SPACE as u32,
+        Hotkey::RightCtrl => key_vk == VK_RCONTROL as u32,
+        Hotkey::CapsLock => key_vk == VK_CAPITAL as u32,
+        Hotkey::RightAlt => key_vk == VK_RMENU as u32,
+        Hotkey::CtrlSpace => keys.ctrl && key_vk == VK_SPACE as u32,
         Hotkey::FnScanCode { scan_code } => kb.scanCode == *scan_code,
         Hotkey::Custom {
             trigger_vk,
             modifiers,
             ..
-        } => modifiers_match(*modifiers, keys) && kb.vkCode == *trigger_vk,
+        } => modifiers_match(*modifiers, keys) && key_vk == *trigger_vk,
     }
 }
 
-fn hotkey_conditions_met(hotkey: &Hotkey, keys: KeyState, kb: &KBDLLHOOKSTRUCT) -> bool {
+fn hotkey_conditions_met(hotkey: &Hotkey, keys: KeyState, key_vk: u32) -> bool {
     match hotkey {
-        Hotkey::CtrlSpace => keys.ctrl && kb.vkCode == VK_SPACE as u32,
+        Hotkey::CtrlSpace => keys.ctrl && key_vk == VK_SPACE as u32,
         Hotkey::Custom {
             trigger_vk,
             modifiers,
             ..
-        } => modifiers_match(*modifiers, keys) && kb.vkCode == *trigger_vk,
+        } => modifiers_match(*modifiers, keys) && key_vk == *trigger_vk,
         _ => true,
     }
 }
 
-fn is_hotkey_relevant_event(hotkey: &Hotkey, kb: &KBDLLHOOKSTRUCT) -> bool {
+fn is_hotkey_relevant_event(hotkey: &Hotkey, kb: &KBDLLHOOKSTRUCT, key_vk: u32) -> bool {
     match hotkey {
-        Hotkey::RightCtrl => kb.vkCode == VK_RCONTROL as u32,
-        Hotkey::CapsLock => kb.vkCode == VK_CAPITAL as u32,
-        Hotkey::RightAlt => kb.vkCode == VK_RMENU as u32 || kb.vkCode == VK_MENU as u32,
-        Hotkey::CtrlSpace => is_ctrl_vk(kb.vkCode) || kb.vkCode == VK_SPACE as u32,
+        Hotkey::RightCtrl => key_vk == VK_RCONTROL as u32,
+        Hotkey::CapsLock => key_vk == VK_CAPITAL as u32,
+        Hotkey::RightAlt => key_vk == VK_RMENU as u32,
+        Hotkey::CtrlSpace => is_ctrl_vk(key_vk) || key_vk == VK_SPACE as u32,
         Hotkey::FnScanCode { scan_code } => kb.scanCode == *scan_code,
         Hotkey::Custom {
             trigger_vk,
             modifiers,
             ..
-        } => kb.vkCode == *trigger_vk || modifier_belongs_to_hotkey(kb.vkCode, *modifiers),
+        } => key_vk == *trigger_vk || modifier_belongs_to_hotkey(key_vk, *modifiers),
     }
 }
 
-fn should_suppress_while_active(hotkey: &Hotkey, kb: &KBDLLHOOKSTRUCT) -> bool {
+fn should_suppress_while_active(hotkey: &Hotkey, kb: &KBDLLHOOKSTRUCT, key_vk: u32) -> bool {
     match hotkey {
-        Hotkey::RightCtrl => kb.vkCode == VK_RCONTROL as u32,
-        Hotkey::CapsLock => kb.vkCode == VK_CAPITAL as u32,
-        Hotkey::RightAlt => kb.vkCode == VK_RMENU as u32 || kb.vkCode == VK_MENU as u32,
-        Hotkey::CtrlSpace => is_ctrl_vk(kb.vkCode) || kb.vkCode == VK_SPACE as u32,
+        Hotkey::RightCtrl => key_vk == VK_RCONTROL as u32,
+        Hotkey::CapsLock => key_vk == VK_CAPITAL as u32,
+        Hotkey::RightAlt => key_vk == VK_RMENU as u32,
+        Hotkey::CtrlSpace => is_ctrl_vk(key_vk) || key_vk == VK_SPACE as u32,
         Hotkey::FnScanCode { scan_code } => kb.scanCode == *scan_code,
         Hotkey::Custom {
             trigger_vk,
             modifiers,
             ..
-        } => kb.vkCode == *trigger_vk || modifier_belongs_to_hotkey(kb.vkCode, *modifiers),
+        } => key_vk == *trigger_vk || modifier_belongs_to_hotkey(key_vk, *modifiers),
+    }
+}
+
+fn effective_vk(kb: &KBDLLHOOKSTRUCT) -> u32 {
+    let extended = (kb.flags & LLKHF_EXTENDED) != 0;
+    match kb.vkCode {
+        vk if vk == VK_CONTROL as u32 || vk == VK_LCONTROL as u32 || vk == VK_RCONTROL as u32 => {
+            if extended {
+                VK_RCONTROL as u32
+            } else {
+                VK_LCONTROL as u32
+            }
+        }
+        vk if vk == VK_MENU as u32 || vk == VK_LMENU as u32 || vk == VK_RMENU as u32 => {
+            if extended {
+                VK_RMENU as u32
+            } else {
+                VK_LMENU as u32
+            }
+        }
+        vk => vk,
     }
 }
 

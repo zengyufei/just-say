@@ -6,6 +6,10 @@ Hold a global hotkey to record. Release the hotkey to transcribe speech, optiona
 
 [中文说明](README.zh.md)
 
+## Project Status
+
+JustSay is maintained when time allows. Issues and pull requests are welcome, but response times may vary.
+
 ## Screenshots
 
 ![JustSay usage overlay](screenshot/用法.png)
@@ -23,8 +27,8 @@ Hold a global hotkey to record. Release the hotkey to transcribe speech, optiona
 - STT compatibility modes:
   - OpenAI-style `/audio/transcriptions`
   - Aliyun Qwen-ASR `/chat/completions`
-- Optional LLM refinement for cleaning up speech transcripts. The first pass returns a confidence score; scores below 85 trigger a second intent-aware correction pass before paste.
-- Optional Voice Actions intent routing. When enabled, clear commands such as web search, open URL, open JustSay settings/logs, or opening a local app can run as actions instead of being pasted as text.
+- Optional Smart Understanding. When enabled, JustSay uses a chat model to decide whether the utterance is dictation, repair, rewriting, writing, note-taking, search, URL opening, app launch, or a JustSay internal action.
+- Optional LLM refinement and second-pass repair. Confidence scores are used internally for repair decisions and logs, not shown in the overlay.
 - Non-activating always-on-top overlay with RMS-driven waveform and optional before/after debug panels.
 - Clipboard-preserving text injection using Win32 Clipboard API and `SendInput`.
 - Best-effort IME/layout handling before paste.
@@ -59,7 +63,7 @@ LLM Base URL: https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM Model: a chat model available in your account
 ```
 
-Voice Actions is disabled by default. It reuses the LLM Chat Completions settings for conservative intent classification. If the intent is unclear, the app falls back to the normal refine-and-paste flow.
+Smart Understanding is disabled by default. It reuses the LLM Chat Completions settings to understand natural speech before choosing a text or action path. JustSay is still an input-first assistant, not a general agent: it can dictate, repair recognition errors, rewrite recent context, compose short drafts, turn speech into notes, open searches or URLs, and launch apps through Start Menu shortcut resolution. It does not run commands, modify files, control other apps, make professional decisions, or perform complex automation. If understanding fails or is low-confidence for an action, JustSay falls back to the normal refine-and-paste flow.
 
 Configuration is stored in:
 
@@ -68,6 +72,14 @@ Configuration is stored in:
 ```
 
 API keys are encrypted with Windows DPAPI before being written to the local config file.
+
+## Requirements
+
+- Windows 10 or Windows 11.
+- Rust stable toolchain.
+- Windows MSVC Rust target: `x86_64-pc-windows-msvc`.
+- An OpenAI-compatible STT API key, or an Aliyun DashScope-compatible API key for Qwen-ASR.
+- Optional: an OpenAI-compatible chat model API key for LLM refinement and Smart Understanding.
 
 ## Logs
 
@@ -79,7 +91,7 @@ Logs are written to:
 
 Use the tray menu item `Open Logs` to open the latest log file.
 
-When LLM refinement or Voice Actions are enabled, logs can include dictated text, LLM before/after text, refinement scores, intent JSON, and action results for debugging. Do not share logs publicly if they contain private dictated content.
+When LLM refinement or Smart Understanding are enabled, logs can include dictated text, LLM before/after text, internal scores, understanding JSON, and action results for debugging. The overlay shows only user-readable text or action results. Do not share logs publicly if they contain private dictated content.
 
 ## Build
 
@@ -87,6 +99,12 @@ Install the Windows MSVC Rust target:
 
 ```powershell
 rustup target add x86_64-pc-windows-msvc
+```
+
+Run from source:
+
+```powershell
+.\scripts\build.ps1 run
 ```
 
 Build with the helper script:
@@ -107,9 +125,13 @@ The executable is written to:
 target\x86_64-pc-windows-msvc\release\justsay.exe
 ```
 
+## CI
+
+This project uses GitHub Actions only. The CI workflow runs formatting checks, `cargo check`, tests, and a release build on pull requests and pushes to `main` or `master`.
+
 ## Release Workflow
 
-GitHub Actions release builds are tag-only. Push a tag to build and publish `justsay.exe` directly as a GitHub Release asset:
+Release builds are handled by GitHub Actions and are tag-only. Update [CHANGELOG.md](CHANGELOG.md), commit the change, then push a version tag to build and publish `justsay.exe` directly as a GitHub Release asset:
 
 ```powershell
 git tag v0.1.0
@@ -117,6 +139,10 @@ git push origin v0.1.0
 ```
 
 The workflow builds on `windows-latest`, compresses the executable with UPX, and uploads the `.exe` itself without wrapping it in a zip.
+
+## License
+
+JustSay is released under the [MIT License](LICENSE).
 
 ## Security Notes
 

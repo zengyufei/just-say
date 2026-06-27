@@ -10,13 +10,13 @@ mod hotkey;
 mod i18n;
 mod ime;
 mod injector;
-mod intent;
 mod logger;
 mod overlay;
 mod refiner;
 mod settings;
 mod transcriber;
 mod tray;
+mod understanding;
 mod util;
 
 use anyhow::Context;

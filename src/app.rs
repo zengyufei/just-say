@@ -2,15 +2,21 @@ use crate::{
     actions::ActionExecutor,
     audio::Recorder,
     config::{Config, ConfigStore, Hotkey, Language},
-    intent::{IntentDecision, IntentRouter},
     refiner::OpenAiRefiner,
     transcriber::OpenAiTranscriber,
+    understanding::{
+        RecentInteraction, UnderstandingKind, UnderstandingRequest, UnderstandingRouter,
+    },
 };
 use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+
+const RECENT_CONTEXT_LIMIT: usize = 5;
+const UNDERSTANDING_ACCEPT_CONFIDENCE: u8 = 85;
 
 pub struct AppController {
     config: Mutex<ConfigStore>,
@@ -18,6 +24,7 @@ pub struct AppController {
     busy: AtomicBool,
     status: Mutex<String>,
     stats: Mutex<AppStats>,
+    recent_context: Mutex<VecDeque<RecentInteraction>>,
     runtime: tokio::runtime::Runtime,
 }
 
@@ -47,6 +54,15 @@ pub struct ApiSettingsInput {
     pub actions_enabled: bool,
 }
 
+enum SmartUnderstandingResult {
+    Text {
+        text: String,
+        kind: UnderstandingKind,
+    },
+    ActionHandled,
+    Fallback,
+}
+
 impl AppController {
     pub fn new(config: ConfigStore, runtime: tokio::runtime::Runtime) -> Self {
         let status = format!(
@@ -60,6 +76,7 @@ impl AppController {
             busy: AtomicBool::new(false),
             status: Mutex::new(status),
             stats: Mutex::new(AppStats::default()),
+            recent_context: Mutex::new(VecDeque::with_capacity(RECENT_CONTEXT_LIMIT)),
             runtime,
         }
     }
@@ -177,95 +194,14 @@ impl AppController {
         tracing::info!(stt_transcript_before_llm = %raw_text, "stt_transcript_before_llm");
         crate::overlay::set_text(&raw_text);
 
-        if self.try_voice_action(&config, &raw_text).await {
-            return;
-        }
-
-        let final_text = if config.llm.enabled {
-            match crate::dpapi::unprotect_from_base64(&config.llm.encrypted_api_key) {
-                Ok(Some(key)) if !key.is_empty() => {
-                    crate::overlay::set_debug_texts(&raw_text, "LLM 正在优化...");
-                    tracing::info!(before = %raw_text, "llm_refine_start");
-                    crate::overlay::set_text("Refining...");
-                    let refiner = OpenAiRefiner {
-                        api_base_url: config.llm.api_base_url.clone(),
-                        api_key: key,
-                        model: config.llm.model.clone(),
-                    };
-                    match refiner.refine_detailed(&raw_text).await {
-                        Ok(report) if !report.final_text.is_empty() => {
-                            tracing::info!(
-                                before = %raw_text,
-                                first_after = %report.first_text,
-                                first_score = report.first_score,
-                                first_reason = %report.first_reason,
-                                second_after = report.second_text.as_deref().unwrap_or(""),
-                                second_score = report.second_score.unwrap_or(0),
-                                second_reason = report.second_reason.as_deref().unwrap_or(""),
-                                after = %report.final_text,
-                                "llm_refine_result"
-                            );
-                            let debug_text = if let Some(second_text) = &report.second_text {
-                                format!(
-                                    "第一遍评分: {} / 100\n{}\n\n二次优化评分: {} / 100\n{}",
-                                    report.first_score,
-                                    report.first_text,
-                                    report.second_score.unwrap_or(0),
-                                    second_text
-                                )
-                            } else {
-                                format!(
-                                    "第一遍评分: {} / 100\n{}",
-                                    report.first_score, report.final_text
-                                )
-                            };
-                            tracing::info!(
-                                before = %raw_text,
-                                score = report.first_score,
-                                used_second_pass = report.second_text.is_some(),
-                                "llm_refine_scored"
-                            );
-                            crate::overlay::set_debug_texts(&raw_text, &debug_text);
-                            report.final_text
-                        }
-                        Ok(_) => {
-                            tracing::warn!(before = %raw_text, "llm_refine_empty_result");
-                            crate::overlay::set_debug_texts(
-                                &raw_text,
-                                "LLM 返回为空，使用识别内容",
-                            );
-                            raw_text.clone()
-                        }
-                        Err(err) => {
-                            tracing::warn!(
-                                %err,
-                                before = %raw_text,
-                                "LLM refinement failed; using raw STT text"
-                            );
-                            crate::overlay::set_text("Refine failed, using transcript");
-                            crate::overlay::set_debug_texts(
-                                &raw_text,
-                                "LLM 优化失败，使用识别内容",
-                            );
-                            raw_text.clone()
-                        }
-                    }
-                }
-                Ok(_) => {
-                    tracing::info!(before = %raw_text, "llm_refine_skipped_missing_key");
-                    crate::overlay::set_debug_texts(&raw_text, "LLM 未配置 API Key");
-                    raw_text.clone()
-                }
-                Err(err) => {
-                    tracing::warn!(%err, before = %raw_text, "failed to decrypt LLM key");
-                    crate::overlay::set_debug_texts(&raw_text, "LLM 配置错误，使用识别内容");
-                    raw_text.clone()
-                }
-            }
-        } else {
-            tracing::info!(before = %raw_text, "llm_refine_disabled");
-            crate::overlay::set_debug_texts(&raw_text, "LLM 未启用");
-            raw_text
+        let (final_text, final_kind) = match self.try_smart_understanding(&config, &raw_text).await
+        {
+            SmartUnderstandingResult::Text { text, kind } => (text, kind),
+            SmartUnderstandingResult::ActionHandled => return,
+            SmartUnderstandingResult::Fallback => (
+                self.refine_traditional_text(&config, &raw_text).await,
+                UnderstandingKind::Dictation,
+            ),
         };
 
         crate::overlay::set_text("Pasting...");
@@ -287,6 +223,12 @@ impl AppController {
             stats.total_final_chars += final_chars as u64;
             stats.last_error = None;
         }
+        self.remember_interaction(
+            raw_text.clone(),
+            final_kind,
+            final_text.clone(),
+            String::new(),
+        );
         self.set_status("Ready");
         crate::overlay::set_text("Done");
         tokio::time::sleep(std::time::Duration::from_millis(520)).await;
@@ -294,79 +236,165 @@ impl AppController {
         self.busy.store(false, Ordering::SeqCst);
     }
 
-    async fn try_voice_action(self: &Arc<Self>, config: &Config, raw_text: &str) -> bool {
+    async fn try_smart_understanding(
+        self: &Arc<Self>,
+        config: &Config,
+        raw_text: &str,
+    ) -> SmartUnderstandingResult {
         if !config.actions.enabled {
-            return false;
+            return SmartUnderstandingResult::Fallback;
         }
         let llm_key = match crate::dpapi::unprotect_from_base64(&config.llm.encrypted_api_key) {
             Ok(Some(key)) if !key.trim().is_empty() => key,
             Ok(_) => {
-                tracing::info!(before = %raw_text, "voice_action_skipped_missing_llm_key");
-                crate::overlay::set_debug_texts(
-                    raw_text,
-                    "Voice Actions 需要 LLM API Key，改为输入文本",
-                );
-                return false;
+                tracing::info!(before = %raw_text, "smart_understanding_skipped_missing_llm_key");
+                crate::overlay::set_debug_texts(raw_text, "智能理解需要 LLM API Key，改为输入文本");
+                return SmartUnderstandingResult::Fallback;
             }
             Err(err) => {
-                tracing::warn!(%err, before = %raw_text, "voice_action_key_decrypt_failed");
-                crate::overlay::set_debug_texts(raw_text, "Voice Actions 配置错误，改为输入文本");
-                return false;
+                tracing::warn!(%err, before = %raw_text, "smart_understanding_key_decrypt_failed");
+                crate::overlay::set_debug_texts(raw_text, "智能理解配置错误，改为输入文本");
+                return SmartUnderstandingResult::Fallback;
             }
         };
         if config.llm.api_base_url.trim().is_empty() || config.llm.model.trim().is_empty() {
-            tracing::info!(before = %raw_text, "voice_action_skipped_incomplete_llm_config");
-            crate::overlay::set_debug_texts(raw_text, "Voice Actions LLM 配置不完整，改为输入文本");
-            return false;
+            tracing::info!(before = %raw_text, "smart_understanding_skipped_incomplete_llm_config");
+            crate::overlay::set_debug_texts(raw_text, "智能理解 LLM 配置不完整，改为输入文本");
+            return SmartUnderstandingResult::Fallback;
         }
 
         crate::overlay::set_text("Understanding...");
-        crate::overlay::set_debug_texts(raw_text, "正在理解意图...");
-        let router = IntentRouter {
+        crate::overlay::set_debug_texts(raw_text, "正在理解...");
+        let request = UnderstandingRequest {
+            raw_text: raw_text.to_string(),
+            language: config.language.clone(),
+            foreground_window_title: foreground_window_title(),
+            recent_context: self.recent_context_snapshot(),
+        };
+        let router = UnderstandingRouter {
             api_base_url: config.llm.api_base_url.clone(),
             api_key: llm_key,
             model: config.llm.model.clone(),
         };
-        let outcome = match router.decide(raw_text).await {
+        let outcome = match router.understand(&request).await {
             Ok(outcome) => outcome,
             Err(err) => {
-                tracing::warn!(%err, before = %raw_text, "voice_action_intent_failed");
-                crate::overlay::set_debug_texts(raw_text, "意图判断失败，改为输入文本");
-                return false;
+                tracing::warn!(
+                    %err,
+                    before = %raw_text,
+                    fallback_path = "traditional_refine",
+                    "smart_understanding_failed"
+                );
+                crate::overlay::set_debug_texts(raw_text, "智能理解失败，改为输入文本");
+                return SmartUnderstandingResult::Fallback;
             }
         };
 
-        let label = outcome.decision.label();
+        let kind = outcome.decision.kind;
+        let kind_label = kind.label();
         tracing::info!(
             before = %raw_text,
-            intent = label,
-            intent_json = %outcome.raw_json,
-            "voice_action_intent"
+            understanding_kind = kind_label,
+            understanding_confidence = outcome.decision.confidence,
+            understanding_json = %outcome.raw_json,
+            action_target = %outcome.decision.action_target,
+            "smart_understanding_decision"
         );
-        crate::overlay::set_debug_texts(raw_text, &format!("意图: {label}\n{}", outcome.raw_json));
 
-        if outcome.decision.is_text_input() {
-            if let IntentDecision::Unsupported { reason } = &outcome.decision {
-                tracing::info!(
-                    before = %raw_text,
-                    reason = reason.as_deref().unwrap_or(""),
-                    "voice_action_unsupported_fallback_to_text"
-                );
-                crate::overlay::set_debug_texts(raw_text, "暂不支持这个动作，改为输入文本");
-            } else {
-                tracing::info!(before = %raw_text, "voice_action_text_input_fallback");
-            }
-            return false;
+        if kind == UnderstandingKind::Unsupported {
+            tracing::info!(
+                before = %raw_text,
+                fallback_path = "traditional_refine",
+                reason = %outcome.decision.reason,
+                "smart_understanding_unsupported_fallback"
+            );
+            crate::overlay::set_debug_texts(raw_text, "暂不支持这个动作，改为输入文本");
+            return SmartUnderstandingResult::Fallback;
         }
 
+        if kind.is_text_output() {
+            let mut final_text = outcome.decision.final_text.clone();
+            let mut used_second_pass = false;
+            if outcome.decision.confidence < UNDERSTANDING_ACCEPT_CONFIDENCE {
+                if let Some(refiner) = self.refiner_from_config(config) {
+                    match refiner
+                        .repair_understanding(raw_text, &final_text, &outcome.decision.reason)
+                        .await
+                    {
+                        Ok(report) if !report.final_text.is_empty() => {
+                            tracing::info!(
+                                before = %raw_text,
+                                understanding_kind = kind_label,
+                                understanding_confidence = outcome.decision.confidence,
+                                used_second_pass = true,
+                                second_after = %report.final_text,
+                                second_score = report.second_score.unwrap_or(report.first_score),
+                                second_reason = report.second_reason.as_deref().unwrap_or(&report.first_reason),
+                                "smart_understanding_text_repaired"
+                            );
+                            final_text = report.final_text;
+                            used_second_pass = true;
+                        }
+                        Ok(_) => tracing::warn!(
+                            before = %raw_text,
+                            fallback_path = "understanding_final_text",
+                            "smart_understanding_repair_empty"
+                        ),
+                        Err(err) => tracing::warn!(
+                            %err,
+                            before = %raw_text,
+                            fallback_path = "understanding_final_text",
+                            "smart_understanding_repair_failed"
+                        ),
+                    }
+                } else {
+                    tracing::info!(
+                        before = %raw_text,
+                        fallback_path = "understanding_final_text",
+                        "smart_understanding_low_confidence_without_refiner"
+                    );
+                }
+            }
+            tracing::info!(
+                before = %raw_text,
+                understanding_kind = kind_label,
+                understanding_confidence = outcome.decision.confidence,
+                used_second_pass,
+                after = %final_text,
+                "smart_understanding_text_result"
+            );
+            let debug_text = if used_second_pass {
+                format!("二次优化\n{final_text}")
+            } else {
+                final_text.clone()
+            };
+            crate::overlay::set_debug_texts(raw_text, &debug_text);
+            return SmartUnderstandingResult::Text {
+                text: final_text,
+                kind,
+            };
+        }
+
+        if outcome.decision.confidence < UNDERSTANDING_ACCEPT_CONFIDENCE {
+            tracing::info!(
+                before = %raw_text,
+                understanding_kind = kind_label,
+                understanding_confidence = outcome.decision.confidence,
+                fallback_path = "traditional_refine",
+                "smart_understanding_low_confidence_action_fallback"
+            );
+            crate::overlay::set_debug_texts(raw_text, "动作理解不够确定，改为输入文本");
+            return SmartUnderstandingResult::Fallback;
+        }
         let executor = ActionExecutor::new(self.clone());
         match executor.execute(&outcome.decision) {
             Ok(result) => {
                 tracing::info!(
                     before = %raw_text,
-                    intent = label,
+                    understanding_kind = kind_label,
+                    understanding_confidence = outcome.decision.confidence,
                     result = %result.display,
-                    "voice_action_executed"
+                    "smart_understanding_action_executed"
                 );
                 {
                     let mut stats = self.stats.lock();
@@ -376,28 +404,140 @@ impl AppController {
                 crate::overlay::set_text("Done");
                 crate::overlay::set_debug_texts(
                     raw_text,
-                    &format!("意图: {label}\n{}", result.display),
+                    &format!("{}\n{}", outcome.decision.intent_summary, result.display),
                 );
-                self.set_status("Voice action executed");
+                self.remember_interaction(
+                    raw_text.to_string(),
+                    kind,
+                    String::new(),
+                    result.display.clone(),
+                );
+                self.set_status("Smart action executed");
                 tokio::time::sleep(std::time::Duration::from_millis(900)).await;
                 crate::overlay::hide();
                 self.busy.store(false, Ordering::SeqCst);
-                true
+                SmartUnderstandingResult::ActionHandled
             }
             Err(err) => {
                 tracing::warn!(
                     %err,
                     before = %raw_text,
-                    intent = label,
-                    "voice_action_execute_failed_fallback_to_text"
+                    understanding_kind = kind_label,
+                    fallback_path = "traditional_refine",
+                    "smart_understanding_action_failed_fallback_to_text"
                 );
                 crate::overlay::set_debug_texts(
                     raw_text,
                     &format!("动作执行失败，改为输入文本: {err}"),
                 );
-                false
+                SmartUnderstandingResult::Fallback
             }
         }
+    }
+
+    async fn refine_traditional_text(&self, config: &Config, raw_text: &str) -> String {
+        if config.llm.enabled {
+            match self.refiner_from_config(config) {
+                Some(refiner) => {
+                    crate::overlay::set_debug_texts(raw_text, "LLM 正在优化...");
+                    tracing::info!(before = %raw_text, "llm_refine_start");
+                    crate::overlay::set_text("Refining...");
+                    match refiner.refine_detailed(raw_text).await {
+                        Ok(report) if !report.final_text.is_empty() => {
+                            tracing::info!(
+                                before = %raw_text,
+                                first_after = %report.first_text,
+                                first_score = report.first_score,
+                                first_reason = %report.first_reason,
+                                second_after = report.second_text.as_deref().unwrap_or(""),
+                                second_score = report.second_score.unwrap_or(0),
+                                second_reason = report.second_reason.as_deref().unwrap_or(""),
+                                after = %report.final_text,
+                                "llm_refine_result"
+                            );
+                            let debug_text = if let Some(second_text) = &report.second_text {
+                                format!("二次优化\n{second_text}")
+                            } else {
+                                report.final_text.clone()
+                            };
+                            tracing::info!(
+                                before = %raw_text,
+                                score = report.first_score,
+                                used_second_pass = report.second_text.is_some(),
+                                "llm_refine_scored"
+                            );
+                            crate::overlay::set_debug_texts(raw_text, &debug_text);
+                            report.final_text
+                        }
+                        Ok(_) => {
+                            tracing::warn!(before = %raw_text, "llm_refine_empty_result");
+                            crate::overlay::set_debug_texts(raw_text, "LLM 返回为空，使用识别内容");
+                            raw_text.to_string()
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                %err,
+                                before = %raw_text,
+                                "LLM refinement failed; using raw STT text"
+                            );
+                            crate::overlay::set_text("Refine failed, using transcript");
+                            crate::overlay::set_debug_texts(raw_text, "LLM 优化失败，使用识别内容");
+                            raw_text.to_string()
+                        }
+                    }
+                }
+                None => {
+                    tracing::info!(before = %raw_text, "llm_refine_skipped_missing_key_or_config");
+                    crate::overlay::set_debug_texts(raw_text, "LLM 配置不完整，使用识别内容");
+                    raw_text.to_string()
+                }
+            }
+        } else {
+            tracing::info!(before = %raw_text, "llm_refine_disabled");
+            crate::overlay::set_debug_texts(raw_text, "LLM 未启用");
+            raw_text.to_string()
+        }
+    }
+
+    fn refiner_from_config(&self, config: &Config) -> Option<OpenAiRefiner> {
+        if config.llm.api_base_url.trim().is_empty() || config.llm.model.trim().is_empty() {
+            return None;
+        }
+        match crate::dpapi::unprotect_from_base64(&config.llm.encrypted_api_key) {
+            Ok(Some(key)) if !key.trim().is_empty() => Some(OpenAiRefiner {
+                api_base_url: config.llm.api_base_url.clone(),
+                api_key: key,
+                model: config.llm.model.clone(),
+            }),
+            Ok(_) => None,
+            Err(err) => {
+                tracing::warn!(%err, "failed to decrypt LLM key");
+                None
+            }
+        }
+    }
+
+    fn recent_context_snapshot(&self) -> Vec<RecentInteraction> {
+        self.recent_context.lock().iter().cloned().collect()
+    }
+
+    fn remember_interaction(
+        &self,
+        raw_text: String,
+        kind: UnderstandingKind,
+        final_text: String,
+        action_result: String,
+    ) {
+        let mut context = self.recent_context.lock();
+        if context.len() >= RECENT_CONTEXT_LIMIT {
+            context.pop_front();
+        }
+        context.push_back(RecentInteraction {
+            raw_text,
+            kind,
+            final_text,
+            action_result,
+        });
     }
 
     fn fail(&self, overlay: &str, status: &str) {
@@ -470,13 +610,13 @@ impl AppController {
             let mut store = self.config.lock();
             store.config.actions.enabled = enabled;
             if let Err(err) = store.save() {
-                tracing::error!(%err, "failed to save Voice Actions state");
+                tracing::error!(%err, "failed to save Smart Understanding state");
             }
         }
         self.set_status(if enabled {
-            "Voice actions enabled"
+            "Smart understanding enabled"
         } else {
-            "Voice actions disabled"
+            "Smart understanding disabled"
         });
     }
 
@@ -546,5 +686,25 @@ fn maybe_save_debug_audio(audio: &crate::audio::AudioChunk) {
             }
         }
         Err(err) => tracing::warn!(%err, "failed to resolve log directory for debug audio"),
+    }
+}
+
+fn foreground_window_title() -> String {
+    unsafe {
+        let hwnd = windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow();
+        if hwnd.is_null() {
+            return String::new();
+        }
+        let len = windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextLengthW(hwnd);
+        if len <= 0 {
+            return String::new();
+        }
+        let mut buf = vec![0u16; len as usize + 1];
+        windows_sys::Win32::UI::WindowsAndMessaging::GetWindowTextW(
+            hwnd,
+            buf.as_mut_ptr(),
+            buf.len() as i32,
+        );
+        crate::util::string_from_wide(&buf)
     }
 }
