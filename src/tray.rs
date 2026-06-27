@@ -177,41 +177,59 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         return;
     };
     let config = controller.config();
+    let ui = crate::i18n::UiText::for_language(&config.language);
     let menu = CreatePopupMenu();
     let lang_menu = CreatePopupMenu();
     let hotkey_menu = CreatePopupMenu();
     let llm_menu = CreatePopupMenu();
 
-    append_disabled(menu, &format!("Status: {}", controller.status()));
     append_disabled(
         menu,
         &format!(
-            "Mic: {}",
+            "{}: {}",
+            ui.status,
+            crate::i18n::status_label(&config.language, &controller.status())
+        ),
+    );
+    append_disabled(
+        menu,
+        &format!(
+            "{}: {}",
+            ui.mic,
             truncate_menu_text(&crate::audio::default_input_device_name(), 64)
         ),
     );
-    append_disabled(menu, &format!("Hotkey: {}", config.hotkey.display_name()));
     append_disabled(
         menu,
         &format!(
-            "STT: {} / {}",
-            config.stt.compatibility.display_name(),
+            "{}: {}",
+            ui.hotkey,
+            crate::i18n::hotkey_label(&config.language, &config.hotkey)
+        ),
+    );
+    append_disabled(
+        menu,
+        &format!(
+            "{}: {} / {}",
+            ui.stt,
+            crate::i18n::stt_compat_label(&config.language, &config.stt.compatibility),
             truncate_menu_text(&config.stt.model, 42)
         ),
     );
     append_disabled(
         menu,
         &format!(
-            "LLM: {} / {}",
+            "{}: {} / {}",
+            ui.llm,
             if config.llm.enabled {
-                "Enabled"
+                ui.enabled
             } else {
-                "Disabled"
+                ui.disabled
             },
             truncate_menu_text(&config.llm.model, 42)
         ),
     );
-    for line in stats_menu_lines(&controller.stats()) {
+    for line in stats_menu_lines(&config.language, &controller.stats()) {
         append_disabled(menu, &line);
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
@@ -250,47 +268,47 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         menu,
         MF_POPUP,
         lang_menu as usize,
-        wide_null("Language").as_ptr(),
+        wide_null(ui.language).as_ptr(),
     );
 
     append_checked(
         hotkey_menu,
         CMD_HOTKEY_RCTRL,
-        "Right Ctrl",
+        &crate::i18n::hotkey_label(&config.language, &Hotkey::RightCtrl),
         config.hotkey == Hotkey::RightCtrl,
     );
     append_checked(
         hotkey_menu,
         CMD_HOTKEY_CAPS,
-        "CapsLock",
+        &crate::i18n::hotkey_label(&config.language, &Hotkey::CapsLock),
         config.hotkey == Hotkey::CapsLock,
     );
     append_checked(
         hotkey_menu,
         CMD_HOTKEY_RALT,
-        "Right Alt",
+        &crate::i18n::hotkey_label(&config.language, &Hotkey::RightAlt),
         config.hotkey == Hotkey::RightAlt,
     );
     append_checked(
         hotkey_menu,
         CMD_HOTKEY_CTRL_SPACE,
-        "Ctrl+Space",
+        &crate::i18n::hotkey_label(&config.language, &Hotkey::CtrlSpace),
         config.hotkey == Hotkey::CtrlSpace,
     );
     AppendMenuW(
         menu,
         MF_POPUP,
         hotkey_menu as usize,
-        wide_null("Hotkey").as_ptr(),
+        wide_null(ui.hotkey).as_ptr(),
     );
 
     append_checked(
         llm_menu,
         CMD_LLM_ENABLE,
         if config.llm.enabled {
-            "Disable"
+            ui.disable
         } else {
-            "Enable"
+            ui.enable
         },
         config.llm.enabled,
     );
@@ -298,34 +316,34 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         llm_menu,
         MF_STRING,
         CMD_LLM_SETTINGS as usize,
-        wide_null("Settings").as_ptr(),
+        wide_null(ui.settings).as_ptr(),
     );
     AppendMenuW(
         menu,
         MF_POPUP,
         llm_menu as usize,
-        wide_null("LLM Refinement").as_ptr(),
+        wide_null(ui.llm_refinement).as_ptr(),
     );
 
-    append_checked(menu, CMD_STARTUP, "Start at login", config.start_at_login);
+    append_checked(menu, CMD_STARTUP, ui.start_at_login, config.start_at_login);
     AppendMenuW(
         menu,
         MF_STRING,
         CMD_SETTINGS as usize,
-        wide_null("Settings").as_ptr(),
+        wide_null(ui.settings).as_ptr(),
     );
     AppendMenuW(
         menu,
         MF_STRING,
         CMD_OPEN_LOGS as usize,
-        wide_null("Open Logs").as_ptr(),
+        wide_null(ui.open_logs).as_ptr(),
     );
     AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
     AppendMenuW(
         menu,
         MF_STRING,
         CMD_QUIT as usize,
-        wide_null("Quit").as_ptr(),
+        wide_null(ui.quit).as_ptr(),
     );
 
     let mut pt = POINT { x: 0, y: 0 };
@@ -356,28 +374,55 @@ unsafe fn append_checked(menu: HMENU, id: u32, text: &str, checked: bool) {
     AppendMenuW(menu, flags, id as usize, wide_null(text).as_ptr());
 }
 
-fn stats_menu_lines(stats: &crate::app::AppStats) -> Vec<String> {
+fn stats_menu_lines(language: &Language, stats: &crate::app::AppStats) -> Vec<String> {
+    let ui = crate::i18n::UiText::for_language(language);
+    let char_unit = match language {
+        Language::ZhCn | Language::ZhTw => "字",
+        _ => "chars",
+    };
     let mut lines = vec![
         format!(
-            "Stats: {} recordings, {} STT ok, {} STT failed",
-            stats.recordings, stats.stt_successes, stats.stt_failures
+            "{}: {} {}, {} {}, {} {}",
+            ui.stats,
+            stats.recordings,
+            ui.recordings,
+            stats.stt_successes,
+            ui.stt_ok,
+            stats.stt_failures,
+            ui.stt_failed
         ),
         format!(
-            "Last audio: {:.1}s, RMS avg {:.4}, peak {:.4}",
+            "{}: {:.1}s, {} {:.4}, {} {:.4}",
+            ui.last_audio,
             stats.last_duration_ms as f32 / 1000.0,
+            ui.rms_avg,
             stats.last_rms_avg,
+            ui.peak,
             stats.last_rms_peak
         ),
         format!(
-            "Text: last STT {} chars, final {} chars, total {} chars",
-            stats.last_stt_chars, stats.last_final_chars, stats.total_final_chars
+            "{}: {} {} {}, {} {} {}, {} {} {}",
+            ui.text,
+            ui.last_stt_chars,
+            stats.last_stt_chars,
+            char_unit,
+            ui.final_chars,
+            stats.last_final_chars,
+            char_unit,
+            ui.total_chars,
+            stats.total_final_chars,
+            char_unit
         ),
     ];
     if stats.paste_failures > 0 {
-        lines.push(format!("Paste failures: {}", stats.paste_failures));
+        lines.push(format!("{}: {}", ui.paste_failures, stats.paste_failures));
     }
     if let Some(error) = &stats.last_error {
-        lines.push(format!("Last error: {}", truncate_menu_text(error, 80)));
+        lines.push(format!(
+            "{}: {}",
+            ui.last_error,
+            truncate_menu_text(error, 80)
+        ));
     }
     lines
 }

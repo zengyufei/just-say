@@ -1,6 +1,6 @@
 use crate::{
     app::{ApiSettingsInput, AppController},
-    config::{Hotkey, SttCompatibility},
+    config::{Hotkey, Language, SttCompatibility},
     util::{string_from_wide, wide_null},
 };
 use parking_lot::Mutex;
@@ -73,10 +73,11 @@ pub fn show(controller: Arc<AppController>) {
             cbWndExtra: 0,
         };
         RegisterClassW(&wc);
+        let ui = crate::i18n::UiText::for_language(&controller.config().language);
         let hwnd = CreateWindowExW(
             WS_EX_DLGMODALFRAME,
             class.as_ptr(),
-            wide_null("JustSay Settings").as_ptr(),
+            wide_null(ui.settings_title).as_ptr(),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -98,18 +99,58 @@ pub fn show(controller: Arc<AppController>) {
 }
 
 pub fn show_message(title: &str, body: &str) {
+    let (title, body, is_error) = localized_message(title, body);
     unsafe {
         MessageBoxW(
             std::ptr::null_mut(),
             wide_null(body).as_ptr(),
             wide_null(title).as_ptr(),
-            if body.starts_with("Failed") {
+            if is_error {
                 MB_ICONERROR
             } else {
                 MB_ICONINFORMATION
             },
         );
     }
+}
+
+fn localized_message(title: &str, body: &str) -> (String, String, bool) {
+    let language = current_language();
+    let ui = crate::i18n::UiText::for_language(&language);
+    let title = match title {
+        "Settings" => ui.settings,
+        "LLM Test" => ui.llm_test,
+        _ => title,
+    }
+    .to_string();
+
+    let is_error = body.starts_with("Failed");
+    let body = if body == "Saved" {
+        ui.saved.to_string()
+    } else if body == "Success" {
+        ui.success.to_string()
+    } else if body == "Failed to create settings window" {
+        ui.failed_to_create_settings.to_string()
+    } else if let Some(rest) = body.strip_prefix("Failed:") {
+        format!("{}:{}", ui.failed_prefix, rest)
+    } else {
+        body.to_string()
+    };
+
+    (title, body, is_error)
+}
+
+fn current_language() -> Language {
+    STATE
+        .get()
+        .and_then(|state| {
+            state
+                .lock()
+                .controller
+                .as_ref()
+                .map(|c| c.config().language)
+        })
+        .unwrap_or_default()
 }
 
 unsafe extern "system" fn wnd_proc(
@@ -158,14 +199,16 @@ unsafe extern "system" fn wnd_proc(
 }
 
 unsafe fn create_controls(hwnd: HWND) {
-    label(hwnd, "Hotkey", 20, 24);
-    label(hwnd, "STT Mode", 20, 68);
-    label(hwnd, "STT Base URL", 20, 112);
-    label(hwnd, "STT API Key", 20, 156);
-    label(hwnd, "STT Model", 20, 200);
-    label(hwnd, "LLM Base URL", 20, 254);
-    label(hwnd, "LLM API Key", 20, 298);
-    label(hwnd, "LLM Model", 20, 342);
+    let language = current_language();
+    let ui = crate::i18n::UiText::for_language(&language);
+    label(hwnd, ui.hotkey, 20, 24);
+    label(hwnd, ui.stt_mode, 20, 68);
+    label(hwnd, ui.stt_base_url, 20, 112);
+    label(hwnd, ui.stt_api_key, 20, 156);
+    label(hwnd, ui.stt_model, 20, 200);
+    label(hwnd, ui.llm_base_url, 20, 254);
+    label(hwnd, ui.llm_api_key, 20, 298);
+    label(hwnd, ui.llm_model, 20, 342);
     let hotkey = hotkey_combo(hwnd, ID_HOTKEY, 140, 20, 340, 120);
     let stt_compat = stt_combo(hwnd, ID_STT_COMPAT, 140, 64, 340, 120);
     let stt_base = edit(hwnd, ID_STT_BASE, 140, 108, 340, 24, false);
@@ -174,8 +217,8 @@ unsafe fn create_controls(hwnd: HWND) {
     let base = edit(hwnd, ID_BASE, 140, 250, 340, 24, false);
     let key = edit(hwnd, ID_KEY, 140, 294, 340, 24, true);
     let model = edit(hwnd, ID_MODEL, 140, 338, 340, 24, false);
-    button(hwnd, ID_TEST, "Test LLM", 270, 384, 100, 30);
-    button(hwnd, ID_SAVE, "Save", 390, 384, 90, 30);
+    button(hwnd, ID_TEST, ui.test_llm, 270, 384, 100, 30);
+    button(hwnd, ID_SAVE, ui.save, 390, 384, 90, 30);
     if let Some(state) = STATE.get() {
         let mut lock = state.lock();
         lock.hotkey_combo = hotkey as isize;
@@ -210,7 +253,11 @@ fn populate_from_config(controller: &Arc<AppController>) {
             );
             SetWindowTextW(
                 lock.stt_compat_combo as HWND,
-                wide_null(config.stt.compatibility.display_name()).as_ptr(),
+                wide_null(crate::i18n::stt_compat_label(
+                    &config.language,
+                    &config.stt.compatibility,
+                ))
+                .as_ptr(),
             );
             SendMessageW(
                 lock.stt_compat_combo as HWND,
@@ -385,11 +432,12 @@ unsafe fn stt_combo(parent: HWND, id: isize, x: i32, y: i32, w: i32, h: i32) -> 
         GetModuleHandleW(std::ptr::null()),
         std::ptr::null(),
     );
+    let language = current_language();
     for item in [
         SttCompatibility::OpenAiAudioTranscriptions,
         SttCompatibility::AliyunQwenAsrChat,
     ] {
-        let label = wide_null(item.display_name());
+        let label = wide_null(crate::i18n::stt_compat_label(&language, &item));
         SendMessageW(hwnd, CB_ADDSTRING, 0, label.as_ptr() as LPARAM);
     }
     hwnd
@@ -410,13 +458,14 @@ unsafe fn hotkey_combo(parent: HWND, id: isize, x: i32, y: i32, w: i32, h: i32) 
         GetModuleHandleW(std::ptr::null()),
         std::ptr::null(),
     );
+    let language = current_language();
     for item in [
         Hotkey::RightCtrl,
         Hotkey::CapsLock,
         Hotkey::RightAlt,
         Hotkey::CtrlSpace,
     ] {
-        let label = wide_null(item.display_name());
+        let label = wide_null(crate::i18n::hotkey_label(&language, &item));
         SendMessageW(hwnd, CB_ADDSTRING, 0, label.as_ptr() as LPARAM);
     }
     hwnd

@@ -6,6 +6,7 @@ mod clipboard;
 mod config;
 mod dpapi;
 mod hotkey;
+mod i18n;
 mod ime;
 mod injector;
 mod logger;
