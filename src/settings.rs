@@ -5,18 +5,22 @@ use crate::{
 };
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock};
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowTextLengthW, GetWindowTextW,
-    MessageBoxW, RegisterClassW, SendMessageW, SetWindowTextW, ShowWindow, CBN_SELCHANGE,
-    CBS_DROPDOWNLIST, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CW_USEDEFAULT, ES_AUTOHSCROLL,
-    ES_PASSWORD, HMENU, MB_ICONERROR, MB_ICONINFORMATION, SW_SHOW, WM_CLOSE, WM_COMMAND, WM_CREATE,
-    WM_NCDESTROY, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_DLGMODALFRAME, WS_OVERLAPPED,
-    WS_SYSMENU, WS_VISIBLE, WS_VSCROLL,
+    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowTextLengthW,
+    GetWindowTextW, MessageBoxW, RegisterClassW, SendMessageW, SetWindowTextW, ShowWindow,
+    CBN_SELCHANGE, CBS_DROPDOWNLIST, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CW_USEDEFAULT,
+    ES_AUTOHSCROLL, ES_PASSWORD, HMENU, MB_ICONERROR, MB_ICONINFORMATION, SW_SHOW, WM_CLOSE,
+    WM_COMMAND, WM_CREATE, WM_NCDESTROY, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WS_EX_DLGMODALFRAME, WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE, WS_VSCROLL,
 };
 
 const CLASS_NAME: &str = "JustSaySettingsWindow";
+const WINDOW_EX_STYLE: u32 = WS_EX_DLGMODALFRAME;
+const WINDOW_STYLE: u32 = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+const CLIENT_WIDTH: i32 = 520;
+const CLIENT_HEIGHT: i32 = 438;
 const ID_BASE: isize = 101;
 const ID_KEY: isize = 102;
 const ID_MODEL: isize = 103;
@@ -74,15 +78,16 @@ pub fn show(controller: Arc<AppController>) {
         };
         RegisterClassW(&wc);
         let ui = crate::i18n::UiText::for_language(&controller.config().language);
+        let (window_width, window_height) = adjusted_window_size(CLIENT_WIDTH, CLIENT_HEIGHT);
         let hwnd = CreateWindowExW(
-            WS_EX_DLGMODALFRAME,
+            WINDOW_EX_STYLE,
             class.as_ptr(),
             wide_null(ui.settings_title).as_ptr(),
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+            WINDOW_STYLE,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            520,
-            444,
+            window_width,
+            window_height,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             hinstance,
@@ -95,6 +100,22 @@ pub fn show(controller: Arc<AppController>) {
         state.lock().hwnd = hwnd as isize;
         populate_from_config(&controller);
         ShowWindow(hwnd, SW_SHOW);
+    }
+}
+
+fn adjusted_window_size(client_width: i32, client_height: i32) -> (i32, i32) {
+    unsafe {
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: client_width,
+            bottom: client_height,
+        };
+        if AdjustWindowRectEx(&mut rect, WINDOW_STYLE, 0, WINDOW_EX_STYLE) != 0 {
+            (rect.right - rect.left, rect.bottom - rect.top)
+        } else {
+            (client_width, client_height + 56)
+        }
     }
 }
 
