@@ -1,0 +1,61 @@
+[package]
+name = "voicetray"
+version = "0.1.0"
+edition = "2021"
+authors = ["VoiceTray"]
+description = "Windows system tray press-to-talk voice input app"
+license = "MIT"
+build = "build.rs"
+
+[features]
+default = ["openai"]
+openai = []
+local-whisper = []
+
+[dependencies]
+anyhow = "1.0"
+base64 = "0.22"
+bytemuck = "1.16"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+cpal = "0.15"
+dirs = "5.0"
+parking_lot = "0.12"
+rand = "0.8"
+reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls"], default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { version = "1.39", features = ["macros", "rt-multi-thread", "sync", "time"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Registry",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+    "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_Ime",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

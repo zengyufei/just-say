@@ -1,0 +1,46 @@
+# Rust build output
+/target/
+/target-*/
+
+# Local build/package output
+/dist/
+/*.zip
+/*.exe
+
+# Local logs, debug recordings, and generated diagnostics
+*.log
+*.log.*
+/logs/
+/**/logs/
+last-recording.wav
+cargo-check.log
+
+# Runtime configuration and secrets
+.env
+.env.*
+*.env
+config.toml
+config.local.toml
+secrets.toml
+secrets.json
+*api-key*
+*apikey*
+*secret*
+
+# Voice/STT/LLM private runtime data
+voice-debug/
+recordings/
+transcripts/
+stt/
+llm/
+
+# Local editor and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
+
+# Local prompt scratch file
+提示词.txt
