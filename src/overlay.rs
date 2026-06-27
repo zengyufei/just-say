@@ -19,7 +19,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_POPUP,
 };
 
-const CLASS_NAME: &str = "VoiceTrayOverlayWindow";
+const CLASS_NAME: &str = "JustSayOverlayWindow";
 const TIMER_ID: usize = 42;
 const HEIGHT: i32 = 56;
 const DEBUG_HEIGHT: i32 = 116;

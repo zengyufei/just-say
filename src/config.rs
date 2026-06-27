@@ -179,6 +179,7 @@ impl ConfigStore {
     pub fn load_or_default() -> anyhow::Result<Self> {
         let mut path = crate::util::app_config_dir()?;
         path.push("config.toml");
+        migrate_legacy_config_if_needed(&path);
         if !path.exists() {
             let store = Self {
                 path,
@@ -202,5 +203,35 @@ impl ConfigStore {
         let content = toml::to_string_pretty(&self.config)?;
         std::fs::write(&self.path, content)?;
         Ok(())
+    }
+}
+
+fn migrate_legacy_config_if_needed(new_path: &std::path::Path) {
+    if new_path.exists() {
+        return;
+    }
+    let Some(mut old_path) = dirs::config_dir() else {
+        return;
+    };
+    old_path.push("VoiceTray");
+    old_path.push("config.toml");
+    if !old_path.exists() {
+        return;
+    }
+    if let Some(parent) = new_path.parent() {
+        if let Err(err) = std::fs::create_dir_all(parent) {
+            tracing::warn!(%err, path = %parent.display(), "failed to create JustSay config directory");
+            return;
+        }
+    }
+    match std::fs::copy(&old_path, new_path) {
+        Ok(_) => tracing::info!(
+            from = %old_path.display(),
+            to = %new_path.display(),
+            "migrated legacy VoiceTray config to JustSay"
+        ),
+        Err(err) => {
+            tracing::warn!(%err, from = %old_path.display(), to = %new_path.display(), "failed to migrate legacy config")
+        }
     }
 }

@@ -14,7 +14,7 @@ env:
 
 jobs:
   release:
-    name: Build and publish voicetray.exe
+    name: Build and publish justsay.exe
     runs-on: windows-latest
 
     steps:
@@ -55,8 +55,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          $asset = "dist/voicetray.exe"
-          Copy-Item "target/$env:RUST_TARGET/release/voicetray.exe" $asset -Force
+          $asset = "dist/justsay.exe"
+          Copy-Item "target/$env:RUST_TARGET/release/justsay.exe" $asset -Force
           upx --best $asset
           "asset=$asset" >> $env:GITHUB_OUTPUT
 

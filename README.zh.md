@@ -1,6 +1,6 @@
-# VoiceTray
+# JustSay
 
-VoiceTray 是一个使用 Rust 编写的 Windows 10/11 系统托盘语音输入工具。
+JustSay 是一个使用 Rust 编写的 Windows 10/11 系统托盘语音输入工具。
 
 按住全局热键开始录音，松开热键后进行语音识别，可选调用 LLM 对识别文本做整理，然后把最终文本粘贴到当前聚焦的输入框里。
 
@@ -55,7 +55,7 @@ LLM Model: 你账号可用的聊天模型
 配置文件位置：
 
 ```text
-%APPDATA%\VoiceTray\config.toml
+%APPDATA%\JustSay\config.toml
 ```
 
 API Key 写入本地配置前会使用 Windows DPAPI 加密。
@@ -65,7 +65,7 @@ API Key 写入本地配置前会使用 Windows DPAPI 加密。
 日志目录：
 
 ```text
-%LOCALAPPDATA%\VoiceTray\logs
+%LOCALAPPDATA%\JustSay\logs
 ```
 
 可以通过托盘菜单的 `Open Logs` 打开最新日志。
@@ -95,12 +95,12 @@ cargo build --release --target x86_64-pc-windows-msvc
 构建产物：
 
 ```text
-target\x86_64-pc-windows-msvc\release\voicetray.exe
+target\x86_64-pc-windows-msvc\release\justsay.exe
 ```
 
 ## GitHub Release
 
-GitHub Actions 只会在 push tag 时触发。推送 tag 后会自动构建并发布 `voicetray.exe`：
+GitHub Actions 只会在 push tag 时触发。推送 tag 后会自动构建并发布 `justsay.exe`：
 
 ```powershell
 git tag v0.1.0
@@ -111,6 +111,6 @@ Workflow 使用 `windows-latest` 构建，用 UPX 压缩 exe，并直接把 `.ex
 
 ## 安全说明
 
-VoiceTray 会使用全局低级键盘 hook、剪贴板访问和模拟粘贴。这些能力是语音输入工具的预期行为，但未签名构建可能被安全软件提示。正式分发建议进行代码签名，并清楚说明这些行为。
+JustSay 会使用全局低级键盘 hook、剪贴板访问和模拟粘贴。这些能力是语音输入工具的预期行为，但未签名构建可能被安全软件提示。正式分发建议进行代码签名，并清楚说明这些行为。
 
-VoiceTray 不需要管理员权限。
+JustSay 不需要管理员权限。

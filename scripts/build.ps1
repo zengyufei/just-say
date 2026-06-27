@@ -1,7 +1,7 @@
 param(
     [ValidateSet("build", "run", "install", "clean", "package")]
     [string]$Task = "build",
-    [string]$InstallDir = "$env:LOCALAPPDATA\VoiceTray"
+    [string]$InstallDir = "$env:LOCALAPPDATA\JustSay"
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,8 +17,8 @@ switch ($Task) {
     "install" {
         cargo build --release --target $Target
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-        Copy-Item "target\$Target\release\voicetray.exe" "$InstallDir\voicetray.exe" -Force
-        Write-Host "Installed to $InstallDir\voicetray.exe"
+        Copy-Item "target\$Target\release\justsay.exe" "$InstallDir\justsay.exe" -Force
+        Write-Host "Installed to $InstallDir\justsay.exe"
     }
     "clean" {
         cargo clean
@@ -27,8 +27,8 @@ switch ($Task) {
         cargo build --release --target $Target
         $Out = "dist"
         New-Item -ItemType Directory -Force -Path $Out | Out-Null
-        Copy-Item "target\$Target\release\voicetray.exe" "$Out\voicetray.exe" -Force
-        Compress-Archive -Path "$Out\voicetray.exe", "README.md" -DestinationPath "$Out\VoiceTray.zip" -Force
-        Write-Host "Package: $Out\VoiceTray.zip"
+        Copy-Item "target\$Target\release\justsay.exe" "$Out\justsay.exe" -Force
+        Compress-Archive -Path "$Out\justsay.exe", "README.md" -DestinationPath "$Out\JustSay.zip" -Force
+        Write-Host "Package: $Out\JustSay.zip"
     }
 }

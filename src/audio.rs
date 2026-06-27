@@ -32,7 +32,7 @@ pub struct Recorder {
     started: std::time::Instant,
 }
 
-// cpal marks streams as not Send on all platforms. VoiceTray creates and stops the
+// cpal marks streams as not Send on all platforms. JustSay creates and stops the
 // recorder from the hotkey worker thread on Windows; this marker is used so the
 // controller can live behind Arc/Mutex shared with the Win32 message pump.
 unsafe impl Send for Recorder {}

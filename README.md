@@ -1,6 +1,6 @@
-# VoiceTray
+# JustSay
 
-VoiceTray is a Windows 10/11 system tray press-to-talk voice input app written in Rust.
+JustSay is a Windows 10/11 system tray press-to-talk voice input app written in Rust.
 
 Hold a global hotkey to record. Release the hotkey to transcribe speech, optionally refine the transcript with an LLM, and paste the final text into the currently focused input field.
 
@@ -55,7 +55,7 @@ LLM Model: a chat model available in your account
 Configuration is stored in:
 
 ```text
-%APPDATA%\VoiceTray\config.toml
+%APPDATA%\JustSay\config.toml
 ```
 
 API keys are encrypted with Windows DPAPI before being written to the local config file.
@@ -65,7 +65,7 @@ API keys are encrypted with Windows DPAPI before being written to the local conf
 Logs are written to:
 
 ```text
-%LOCALAPPDATA%\VoiceTray\logs
+%LOCALAPPDATA%\JustSay\logs
 ```
 
 Use the tray menu item `Open Logs` to open the latest log file.
@@ -95,12 +95,12 @@ cargo build --release --target x86_64-pc-windows-msvc
 The executable is written to:
 
 ```text
-target\x86_64-pc-windows-msvc\release\voicetray.exe
+target\x86_64-pc-windows-msvc\release\justsay.exe
 ```
 
 ## Release Workflow
 
-GitHub Actions release builds are tag-only. Push a tag to build and publish `voicetray.exe` directly as a GitHub Release asset:
+GitHub Actions release builds are tag-only. Push a tag to build and publish `justsay.exe` directly as a GitHub Release asset:
 
 ```powershell
 git tag v0.1.0
@@ -111,6 +111,6 @@ The workflow builds on `windows-latest`, compresses the executable with UPX, and
 
 ## Security Notes
 
-VoiceTray uses a global low-level keyboard hook, clipboard access, and simulated paste. These are expected for this kind of app, but security software may flag unsigned builds. Production distribution should use code signing and clear documentation.
+JustSay uses a global low-level keyboard hook, clipboard access, and simulated paste. These are expected for this kind of app, but security software may flag unsigned builds. Production distribution should use code signing and clear documentation.
 
-VoiceTray does not require administrator privileges.
+JustSay does not require administrator privileges.

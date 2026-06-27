@@ -16,7 +16,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_SYSMENU, WS_VISIBLE, WS_VSCROLL,
 };
 
-const CLASS_NAME: &str = "VoiceTraySettingsWindow";
+const CLASS_NAME: &str = "JustSaySettingsWindow";
 const ID_BASE: isize = 101;
 const ID_KEY: isize = 102;
 const ID_MODEL: isize = 103;
@@ -76,7 +76,7 @@ pub fn show(controller: Arc<AppController>) {
         let hwnd = CreateWindowExW(
             WS_EX_DLGMODALFRAME,
             class.as_ptr(),
-            wide_null("VoiceTray Settings").as_ptr(),
+            wide_null("JustSay Settings").as_ptr(),
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
             CW_USEDEFAULT,
             CW_USEDEFAULT,

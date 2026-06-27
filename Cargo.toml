@@ -1,8 +1,8 @@
 [package]
-name = "voicetray"
+name = "justsay"
 version = "0.1.0"
 edition = "2021"
-authors = ["VoiceTray"]
+authors = ["JustSay"]
 description = "Windows system tray press-to-talk voice input app"
 license = "MIT"
 build = "build.rs"

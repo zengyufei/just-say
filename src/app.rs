@@ -379,7 +379,7 @@ impl AppController {
 }
 
 fn maybe_save_debug_audio(audio: &crate::audio::AudioChunk) {
-    if std::env::var("VOICETRAY_DEBUG_AUDIO").ok().as_deref() != Some("1") {
+    if std::env::var("JUSTSAY_DEBUG_AUDIO").ok().as_deref() != Some("1") {
         return;
     }
     match crate::util::app_log_dir() {

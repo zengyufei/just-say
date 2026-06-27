@@ -28,12 +28,12 @@ fn main() -> anyhow::Result<()> {
     }
 
     let _guard = logger::init().context("initialize logging")?;
-    tracing::info!("VoiceTray starting");
+    tracing::info!("JustSay starting");
 
     let config = config::ConfigStore::load_or_default().context("load config")?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .thread_name("voicetray-async")
+        .thread_name("justsay-async")
         .build()
         .context("create tokio runtime")?;
 

@@ -25,7 +25,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_OVERLAPPED,
 };
 
-const CLASS_NAME: &str = "VoiceTrayHiddenWindow";
+const CLASS_NAME: &str = "JustSayHiddenWindow";
 const TRAY_UID: u32 = 1;
 const WM_TRAY: u32 = WM_APP + 1;
 
@@ -103,7 +103,7 @@ fn create_hidden_window() -> anyhow::Result<HWND> {
         let hwnd = CreateWindowExW(
             0,
             class.as_ptr(),
-            wide_null("VoiceTray").as_ptr(),
+            wide_null("JustSay").as_ptr(),
             WS_OVERLAPPED,
             0,
             0,
@@ -130,7 +130,7 @@ fn add_tray_icon(hwnd: HWND) -> anyhow::Result<()> {
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         nid.uCallbackMessage = WM_TRAY;
         nid.hIcon = LoadIconW(std::ptr::null_mut(), IDI_APPLICATION);
-        let tip = wide_null("VoiceTray");
+        let tip = wide_null("JustSay");
         for (dst, src) in nid.szTip.iter_mut().zip(tip.iter()) {
             *dst = *src;
         }
@@ -460,7 +460,7 @@ pub fn set_startup_registry(enabled: bool) -> anyhow::Result<()> {
         if result != 0 {
             anyhow::bail!("RegCreateKeyExW failed: {result}");
         }
-        let name = wide_null("VoiceTray");
+        let name = wide_null("JustSay");
         if enabled {
             let exe = crate::util::exe_path()?;
             let value = wide_null(format!("\"{}\"", exe.display()));

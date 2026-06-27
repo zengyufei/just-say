@@ -9,9 +9,9 @@ fn main() {
         {
             res.set_icon("resources/app.ico");
         }
-        res.set("FileDescription", "VoiceTray");
-        res.set("ProductName", "VoiceTray");
-        res.set("OriginalFilename", "voicetray.exe");
+        res.set("FileDescription", "JustSay");
+        res.set("ProductName", "JustSay");
+        res.set("OriginalFilename", "justsay.exe");
         if let Err(err) = res.compile() {
             eprintln!("failed to compile Windows resources: {err}");
         }

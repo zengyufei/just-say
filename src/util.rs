@@ -12,7 +12,7 @@ pub fn string_from_wide(buf: &[u16]) -> String {
 
 pub fn app_config_dir() -> anyhow::Result<std::path::PathBuf> {
     let mut path = dirs::config_dir().ok_or_else(|| anyhow::anyhow!("APPDATA is unavailable"))?;
-    path.push("VoiceTray");
+    path.push("JustSay");
     std::fs::create_dir_all(&path)?;
     Ok(path)
 }
@@ -20,7 +20,7 @@ pub fn app_config_dir() -> anyhow::Result<std::path::PathBuf> {
 pub fn app_log_dir() -> anyhow::Result<std::path::PathBuf> {
     let mut path =
         dirs::data_local_dir().ok_or_else(|| anyhow::anyhow!("LOCALAPPDATA is unavailable"))?;
-    path.push("VoiceTray");
+    path.push("JustSay");
     path.push("logs");
     std::fs::create_dir_all(&path)?;
     Ok(path)
@@ -38,7 +38,7 @@ pub fn latest_log_file() -> anyhow::Result<std::path::PathBuf> {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        if !name.starts_with("voicetray.log") {
+        if !name.starts_with("justsay.log") {
             continue;
         }
         let modified = entry
@@ -55,7 +55,7 @@ pub fn latest_log_file() -> anyhow::Result<std::path::PathBuf> {
     }
     Ok(latest.map(|(_, path)| path).unwrap_or_else(|| {
         let mut path = dir;
-        path.push("voicetray.log");
+        path.push("justsay.log");
         path
     }))
 }
