@@ -1,6 +1,8 @@
 use crate::{
+    actions::ActionExecutor,
     audio::Recorder,
     config::{Config, ConfigStore, Hotkey, Language},
+    intent::{IntentDecision, IntentRouter},
     refiner::OpenAiRefiner,
     transcriber::OpenAiTranscriber,
 };
@@ -42,6 +44,7 @@ pub struct ApiSettingsInput {
     pub llm_api_base_url: String,
     pub llm_model: String,
     pub llm_api_key_plain: String,
+    pub actions_enabled: bool,
 }
 
 impl AppController {
@@ -174,6 +177,10 @@ impl AppController {
         tracing::info!(stt_transcript_before_llm = %raw_text, "stt_transcript_before_llm");
         crate::overlay::set_text(&raw_text);
 
+        if self.try_voice_action(&config, &raw_text).await {
+            return;
+        }
+
         let final_text = if config.llm.enabled {
             match crate::dpapi::unprotect_from_base64(&config.llm.encrypted_api_key) {
                 Ok(Some(key)) if !key.is_empty() => {
@@ -185,15 +192,41 @@ impl AppController {
                         api_key: key,
                         model: config.llm.model.clone(),
                     };
-                    match refiner.refine(&raw_text).await {
-                        Ok(text) if !text.is_empty() => {
+                    match refiner.refine_detailed(&raw_text).await {
+                        Ok(report) if !report.final_text.is_empty() => {
                             tracing::info!(
                                 before = %raw_text,
-                                after = %text,
+                                first_after = %report.first_text,
+                                first_score = report.first_score,
+                                first_reason = %report.first_reason,
+                                second_after = report.second_text.as_deref().unwrap_or(""),
+                                second_score = report.second_score.unwrap_or(0),
+                                second_reason = report.second_reason.as_deref().unwrap_or(""),
+                                after = %report.final_text,
                                 "llm_refine_result"
                             );
-                            crate::overlay::set_debug_texts(&raw_text, &text);
-                            text
+                            let debug_text = if let Some(second_text) = &report.second_text {
+                                format!(
+                                    "第一遍评分: {} / 100\n{}\n\n二次优化评分: {} / 100\n{}",
+                                    report.first_score,
+                                    report.first_text,
+                                    report.second_score.unwrap_or(0),
+                                    second_text
+                                )
+                            } else {
+                                format!(
+                                    "第一遍评分: {} / 100\n{}",
+                                    report.first_score, report.final_text
+                                )
+                            };
+                            tracing::info!(
+                                before = %raw_text,
+                                score = report.first_score,
+                                used_second_pass = report.second_text.is_some(),
+                                "llm_refine_scored"
+                            );
+                            crate::overlay::set_debug_texts(&raw_text, &debug_text);
+                            report.final_text
                         }
                         Ok(_) => {
                             tracing::warn!(before = %raw_text, "llm_refine_empty_result");
@@ -261,6 +294,112 @@ impl AppController {
         self.busy.store(false, Ordering::SeqCst);
     }
 
+    async fn try_voice_action(self: &Arc<Self>, config: &Config, raw_text: &str) -> bool {
+        if !config.actions.enabled {
+            return false;
+        }
+        let llm_key = match crate::dpapi::unprotect_from_base64(&config.llm.encrypted_api_key) {
+            Ok(Some(key)) if !key.trim().is_empty() => key,
+            Ok(_) => {
+                tracing::info!(before = %raw_text, "voice_action_skipped_missing_llm_key");
+                crate::overlay::set_debug_texts(
+                    raw_text,
+                    "Voice Actions 需要 LLM API Key，改为输入文本",
+                );
+                return false;
+            }
+            Err(err) => {
+                tracing::warn!(%err, before = %raw_text, "voice_action_key_decrypt_failed");
+                crate::overlay::set_debug_texts(raw_text, "Voice Actions 配置错误，改为输入文本");
+                return false;
+            }
+        };
+        if config.llm.api_base_url.trim().is_empty() || config.llm.model.trim().is_empty() {
+            tracing::info!(before = %raw_text, "voice_action_skipped_incomplete_llm_config");
+            crate::overlay::set_debug_texts(raw_text, "Voice Actions LLM 配置不完整，改为输入文本");
+            return false;
+        }
+
+        crate::overlay::set_text("Understanding...");
+        crate::overlay::set_debug_texts(raw_text, "正在理解意图...");
+        let router = IntentRouter {
+            api_base_url: config.llm.api_base_url.clone(),
+            api_key: llm_key,
+            model: config.llm.model.clone(),
+        };
+        let outcome = match router.decide(raw_text).await {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                tracing::warn!(%err, before = %raw_text, "voice_action_intent_failed");
+                crate::overlay::set_debug_texts(raw_text, "意图判断失败，改为输入文本");
+                return false;
+            }
+        };
+
+        let label = outcome.decision.label();
+        tracing::info!(
+            before = %raw_text,
+            intent = label,
+            intent_json = %outcome.raw_json,
+            "voice_action_intent"
+        );
+        crate::overlay::set_debug_texts(raw_text, &format!("意图: {label}\n{}", outcome.raw_json));
+
+        if outcome.decision.is_text_input() {
+            if let IntentDecision::Unsupported { reason } = &outcome.decision {
+                tracing::info!(
+                    before = %raw_text,
+                    reason = reason.as_deref().unwrap_or(""),
+                    "voice_action_unsupported_fallback_to_text"
+                );
+                crate::overlay::set_debug_texts(raw_text, "暂不支持这个动作，改为输入文本");
+            } else {
+                tracing::info!(before = %raw_text, "voice_action_text_input_fallback");
+            }
+            return false;
+        }
+
+        let executor = ActionExecutor::new(self.clone());
+        match executor.execute(&outcome.decision) {
+            Ok(result) => {
+                tracing::info!(
+                    before = %raw_text,
+                    intent = label,
+                    result = %result.display,
+                    "voice_action_executed"
+                );
+                {
+                    let mut stats = self.stats.lock();
+                    stats.last_final_chars = 0;
+                    stats.last_error = None;
+                }
+                crate::overlay::set_text("Done");
+                crate::overlay::set_debug_texts(
+                    raw_text,
+                    &format!("意图: {label}\n{}", result.display),
+                );
+                self.set_status("Voice action executed");
+                tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+                crate::overlay::hide();
+                self.busy.store(false, Ordering::SeqCst);
+                true
+            }
+            Err(err) => {
+                tracing::warn!(
+                    %err,
+                    before = %raw_text,
+                    intent = label,
+                    "voice_action_execute_failed_fallback_to_text"
+                );
+                crate::overlay::set_debug_texts(
+                    raw_text,
+                    &format!("动作执行失败，改为输入文本: {err}"),
+                );
+                false
+            }
+        }
+    }
+
     fn fail(&self, overlay: &str, status: &str) {
         crate::overlay::set_text(overlay);
         self.set_status(status);
@@ -326,6 +465,21 @@ impl AppController {
         });
     }
 
+    pub fn set_actions_enabled(&self, enabled: bool) {
+        {
+            let mut store = self.config.lock();
+            store.config.actions.enabled = enabled;
+            if let Err(err) = store.save() {
+                tracing::error!(%err, "failed to save Voice Actions state");
+            }
+        }
+        self.set_status(if enabled {
+            "Voice actions enabled"
+        } else {
+            "Voice actions disabled"
+        });
+    }
+
     pub fn update_api_settings(&self, input: ApiSettingsInput) -> anyhow::Result<()> {
         let stt_encrypted = crate::dpapi::protect_to_base64(&input.stt_api_key_plain)?;
         let llm_encrypted = crate::dpapi::protect_to_base64(&input.llm_api_key_plain)?;
@@ -337,6 +491,7 @@ impl AppController {
         store.config.llm.api_base_url = input.llm_api_base_url;
         store.config.llm.model = input.llm_model;
         store.config.llm.encrypted_api_key = llm_encrypted;
+        store.config.actions.enabled = input.actions_enabled;
         store.save()?;
         self.set_status("API settings saved");
         Ok(())

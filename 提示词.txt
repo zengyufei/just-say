@@ -1,152 +1,250 @@
-请实现一个 Windows 系统托盘语音输入法应用，使用 Rust 开发，目标平台为 Windows 10/11 amd64，优先适配 Windows 11。
+JustSay 当前实现说明
 
-应用目标：
-按住一个全局热键开始录音，松开后将转录文字注入当前聚焦的输入框。默认热键不要强依赖 Fn 键，因为 Windows 上 Fn 键通常由键盘固件处理，系统无法稳定捕获。请实现可配置的 Press-to-Talk 热键，默认建议使用 CapsLock 或 Right Ctrl；如果检测环境支持 Fn 扫描码，可作为高级选项启用，否则自动降级到可检测热键。
+这是 JustSay 当前已经实现的事实记录，用于给协作者或 AI 助手快速了解项目现状。本文只描述仓库里已经实现的能力，不包含未实现功能、未来计划或待办事项。
 
-核心要求：
+项目定位
 
-1. 全局按键监听
-   - 使用 Windows Low-Level Keyboard Hook，例如 WH_KEYBOARD_LL，或 Raw Input 实现全局监听。
-   - 支持“按住录音、松开结束”的交互。
-   - 默认热键可配置，至少支持 CapsLock、Right Ctrl、Right Alt、Ctrl+Space。
-   - 尽量抑制被选中的热键事件继续传递，避免触发系统或应用原有快捷键。
-   - 明确处理 Fn 键限制：Fn 不保证可监听，不作为默认热键。
+JustSay 是一个 Windows 10/11 系统托盘 Press-to-Talk 语音输入工具，使用 Rust 开发，目标架构为 x86_64-pc-windows-msvc。
 
-2. 语音录制与转录
-   - 使用 Rust 音频库采集麦克风输入，推荐 cpal。
-   - 采样格式统一转换为 16kHz 或 24kHz mono PCM，便于 STT 后端处理。
-   - 默认识别语言必须为简体中文 zh-CN，确保开箱即用偏向中文识别。
-   - 提供语言切换选项：英语 en-US、简体中文 zh-CN、繁体中文 zh-TW、日语 ja-JP、韩语 ko-KR。
-   - 语言选择保存到本地配置文件，例如 AppData/Roaming 下的 TOML/JSON 配置，或 Windows Registry。
-   - 转录后端设计为可插拔：
-     - 优先支持 OpenAI 兼容的 audio transcription API。
-     - 可选支持本地 whisper.cpp / whisper-rs 后端。
-     - 如果实现流式转录，应设计 streaming STT 接口；如果当前后端不支持流式，则录音结束后一次性转录。
-   - UI 在录音过程中应能显示实时音频 RMS 驱动的波形；如果 STT 后端支持 partial transcript，则实时显示 partial transcript。
+用户按住全局热键开始录音，松开热键后完成语音识别，可选调用 LLM 对识别文本做整理与排版，然后通过剪贴板和模拟 Ctrl+V 粘贴到当前聚焦的输入框。
 
-3. 系统托盘应用
-   - 应用以系统托盘形式运行，不显示普通主窗口，不出现在任务栏。
-   - 可使用 tray-icon、tao、winit、windows-rs 或 native Win32 API。
-   - 托盘菜单包含：
-     - 当前状态
-     - 语言选择：English、简体中文、繁體中文、日本語、한국어
-     - 热键设置入口
-     - LLM Refinement 子菜单
-     - Settings
-     - Quit
-   - 需要支持开机自启动选项，可通过 Startup 文件夹或 Registry Run key 实现。
+当前已经实现的主要能力
 
-4. 录音悬浮窗
-   - 录音时在屏幕底部居中显示一个精致、无边框、非激活、置顶的胶囊状悬浮窗。
-   - 使用 Win32 layered window / no-activate window 实现，推荐窗口样式：
-     - WS_POPUP
-     - WS_EX_TOPMOST
-     - WS_EX_TOOLWINDOW
-     - WS_EX_NOACTIVATE
-     - WS_EX_LAYERED
-   - 不应抢占当前应用焦点。
-   - 支持高 DPI，能在多显示器环境下显示在当前鼠标所在屏幕或当前前台窗口所在屏幕底部。
-   - 胶囊高度 56px，圆角半径 28px。
-   - 背景使用半透明磨砂/亚克力风格；可通过 DWM、Acrylic、Mica 或自绘半透明背景实现，无法使用系统材质时使用高质量半透明背景 fallback。
-   - 内容包括：
-     - 左侧 5 根竖条波形动画，区域 44×32px。
-     - 波形必须由实时音频 RMS 电平驱动，不允许写死假动画。
-     - 五根竖条权重为 [0.5, 0.8, 1.0, 0.75, 0.55]。
-     - 使用平滑包络：attack 40%，release 15%。
-     - 每根竖条添加 ±4% 随机抖动，使动画更自然。
-     - 安静时波形较小，说话声音大时波形明显变大，必须清晰可见。
-     - 右侧文字标签实时显示转录文本或状态。
-     - 文字区域弹性宽度 160-560px，胶囊随文字变多平滑变宽。
-   - 动画要求：
-     - 入场弹簧动画约 0.35s。
-     - 文字宽度平滑过渡约 0.25s。
-     - 退场缩放淡出动画约 0.22s。
+1. 系统托盘运行
 
-5. 文本注入
-   - 使用剪贴板 + 模拟 Ctrl+V 的方式向当前聚焦输入框注入文字。
-   - 注入前保存当前剪贴板内容，注入完成后恢复。
-   - 使用 Windows Clipboard API，不要简单依赖命令行工具。
-   - 使用 SendInput 模拟 Ctrl+V。
-   - 注入前检测当前输入法/键盘布局：
-     - 如果当前是 CJK IME，例如中文、日文、韩文输入法，临时切换到英文/US 键盘布局后再粘贴。
-     - 粘贴完成后恢复原输入法。
-   - 可使用 GetKeyboardLayout、ActivateKeyboardLayout、ImmGetContext、ImmGetOpenStatus、ImmSetOpenStatus 等 Win32/IMM32 API。
-   - 必须尽量避免中文输入法拦截 Ctrl+V 或将粘贴内容进入组合态。
-   - 对失败情况做降级处理：如果无法切换输入法，也要尝试粘贴，并记录日志。
+JustSay 以系统托盘应用形式运行，没有普通主窗口。托盘右键菜单包含状态、当前麦克风、当前热键、STT 模式和模型、LLM 状态和模型、Voice Actions 状态、统计信息、语言菜单、热键菜单、LLM Refinement 菜单、Voice Actions 开关、开机自启动、Settings、Open Logs 和 Quit。
 
-6. LLM Refinement
-   - 接入 OpenAI 兼容 Chat Completions API，用于提升语音识别文本准确率，尤其是中英文混杂内容。
-   - API 配置项：
-     - API Base URL
-     - API Key
-     - Model
-   - LLM refine 是可选功能，默认可以关闭或首次运行未配置。
-   - 如果已启用且配置完整，松开热键后：
-     - 先完成 STT。
-     - 悬浮窗显示 “Refining...”。
-     - 调用 LLM refine。
-     - LLM 返回后注入最终文本。
-   - 如果 LLM 调用失败，回退注入原始转录文本，并显示简短错误状态。
-   - system prompt 必须非常保守，内容类似：
+托盘菜单文案会根据当前识别语言做轻量本地化。简体中文和繁体中文会显示中文界面，其他语言保持英文界面。
 
-     你是一个极其保守的语音识别纠错器。你的任务不是改写、润色、总结或补全文本。只修复明显的语音识别错误，尤其是中文谐音错误、标点明显错误、以及英文技术术语被错误识别成中文的问题，例如“配森”应改为“Python”，“杰森”应改为“JSON”，“扣的”在编程上下文中可能应为“code”。如果输入文本看起来已经正确，必须原样返回。不要删除任何看起来正确的内容。不要改变语气、风格、语序或含义。只输出纠正后的文本，不要解释。
+2. 全局 Press-to-Talk 热键
 
-7. Settings 窗口
-   - 托盘菜单提供 LLM Refinement 子菜单：
-     - Enable / Disable
-     - Settings
-   - Settings 窗口包含：
-     - API Base URL 输入框
-     - API Key 输入框
-     - Model 输入框
-     - Test 按钮
-     - Save 按钮
-   - API Key 输入框必须允许完全清空。
-   - Test 按钮应调用一个轻量测试请求，显示成功或失败。
-   - Save 后写入本地配置。
-   - API Key 建议使用 Windows Credential Manager 或 DPAPI 加密保存；如果实现复杂，可以先使用 DPAPI 加密后的本地配置文件。
+当前使用 Windows Low-Level Keyboard Hook，也就是 WH_KEYBOARD_LL，实现全局按住录音、松开结束。
 
-8. 工程与构建
-   - 使用 Rust stable。
-   - 目标架构：x86_64-pc-windows-msvc。
-   - 使用 Cargo workspace 或单 crate 均可。
-   - 推荐依赖：
-     - windows 或 windows-sys：Win32 API
-     - cpal：音频采集
-     - serde / serde_json / toml：配置
-     - reqwest：HTTP API
-     - tokio：异步任务
-     - tray-icon：系统托盘
-     - winit/tao 或 native Win32：悬浮窗与设置窗口
-     - arboard 或 Win32 Clipboard API：剪贴板，但最终注入逻辑应能可靠处理 Unicode 文本
-   - 提供 Makefile 或 PowerShell 构建脚本，包含：
-     - build
-     - run
-     - install
-     - clean
-     - package
-   - 构建产物为 Windows .exe，并提供可选安装目录。
-   - 如需安装器，可使用 WiX Toolset、NSIS 或 cargo-wix。
-   - 应包含应用图标、版本信息、manifest。
-   - manifest 需要声明 per-monitor DPI awareness。
-   - 不要求管理员权限运行；全局键盘 hook、剪贴板、SendInput 应在普通用户权限下工作。
-   - 注意 Windows 安全软件可能对全局键盘 hook 敏感，需要代码签名和清晰说明。
+默认热键是 Right Ctrl。预设热键包括 Right Ctrl、CapsLock、Right Alt、Ctrl+Space。Settings 中支持自定义录入热键，可以录入单键或修饰键组合，例如 F13、Pause、Ctrl+Space、Alt+Space、Ctrl+Shift+V 等。
 
-9. 日志与错误处理
-   - 使用 tracing 或 log/env_logger。
-   - 日志写入 AppData/Local 下的应用日志目录。
-   - 对以下情况给出清晰错误：
-     - 麦克风权限不可用
-     - 找不到输入设备
-     - STT API 未配置或失败
-     - LLM API 未配置或失败
-     - 剪贴板被其他应用占用
-     - 输入法切换失败
-     - 热键不可监听，尤其是 Fn 键不可用
+热键配置支持以下形式：
 
-10. 重要实现约束
-   - 不要假设 Fn 键可被 Windows 捕获。
-   - 不要实现假的波形动画，波形必须由真实麦克风 RMS 数据驱动。
-   - 不要让悬浮窗抢焦点。
-   - 不要在 LLM refine 中改写用户原意。
-   - 不要在注入完成后破坏用户原剪贴板内容。
+- RightCtrl
+- CapsLock
+- RightAlt
+- CtrlSpace
+- FnScanCode { scan_code }
+- Custom { trigger_vk, trigger_scan_code, extended, modifiers }
+
+自定义热键以“修饰键 + 触发键”为模型，适合 Press-to-Talk 的按下和松开生命周期。录入时按 Esc 会取消录入。
+
+Fn 键不会作为默认热键。代码中保留 FnScanCode 配置形式，但 Fn 是否能被监听取决于键盘是否真的向 Windows 发出扫描码；很多键盘的 Fn 键由固件处理，Windows 无法稳定捕获。
+
+3. 音频采集与处理
+
+音频采集使用 cpal，从系统默认麦克风录音。采集到的音频会转换为 mono，使用线性重采样转为 16 kHz，并编码为 16-bit PCM WAV。
+
+录音过程中会计算实时 RMS 电平，用于驱动悬浮窗波形。录音结束后会记录录音时长、WAV 字节数、平均 RMS 和峰值 RMS。
+
+4. STT 语音识别
+
+默认识别语言是简体中文 zh-CN。当前支持语言包括：
+
+- English / en-US
+- 简体中文 / zh-CN
+- 繁體中文 / zh-TW
+- 日本語 / ja-JP
+- 한국어 / ko-KR
+
+当前实现了两种 STT 兼容模式：
+
+- OpenAI 风格 /audio/transcriptions
+- 阿里云 Qwen-ASR /chat/completions
+
+OpenAI 风格模式会向 {STT Base URL}/audio/transcriptions 发送 multipart/form-data，请求字段包含 model、language 和 file。
+
+阿里云 Qwen-ASR 模式会向 {STT Base URL}/chat/completions 发送 JSON，请求中使用 data:audio/wav;base64,... 形式传入音频，stream 固定为 false，并设置 asr_options.language 和 enable_itn。
+
+当前没有实现本地 whisper.cpp / whisper-rs 后端，也没有实现流式 partial transcript。
+
+5. LLM Refinement
+
+LLM Refinement 是可选功能，默认可以关闭或未配置。启用且 API Key、Base URL、Model 配置完整时，流程是：
+
+先完成 STT，得到原始识别文本；悬浮窗显示 Refining...；调用 OpenAI 兼容 Chat Completions API 做第一阶段整理与评分；如果第一阶段评分大于等于 85 分，直接使用第一阶段文本；如果评分低于 85 分，会把 STT 原文、第一阶段结果、第一阶段评分和评分原因交给第二阶段提示词重新判断用户真实意图并再次纠错；成功后粘贴最终文本；失败时回退粘贴 STT 原文。
+
+LLM 调用使用 temperature: 0.0。接口地址为 {LLM Base URL}/chat/completions。
+
+第一阶段要求模型只返回 JSON，格式为：
+
+{"text":"整理后的最终文本","score":85,"reason":"简短说明评分原因"}
+
+score 是 0 到 100 的整数，表示模型对“整理结果准确恢复用户真实意图并且可直接输入”的信心。当前接受阈值是 85。
+
+当前第一阶段内置 system prompt 的核心内容如下：
+
+你是一个中文优先的语音输入整理与纠错助手。你的任务是把语音识别出来的口语文本，整理成用户本来想输入、可以直接发送、发布、记录或作为 AI Prompt 使用的文字。
+
+重要背景：语音识别文本可能因为口音、音调、语速、麦克风质量、断句错误、同音词、近音词、中英文混杂、专有名词、模型名、产品名、编程术语而明显偏离用户真实想表达的内容。不能机械地相信 STT 原文，也不能随意改写；要结合文本内部上下文，判断用户真正想说的是什么。
+
+核心目标：
+1. 先判断文本类型，再选择合适排版：短聊天保持简洁；普通说明整理成自然段；对比、枚举、清单、步骤、待办、需求和问题描述可以分段、列点或编号。
+2. 让输出像用户自己打出来的成稿，而不是逐字转录稿。重点优化可读性、层次、标点、换行和轻微措辞。
+3. 优先恢复用户真实意图和原语气；只整理表达，不替用户扩写观点、添加信息、补结论或改变立场。
+
+你可以做：
+1. 删除明显的口水词、停顿词和无意义重复，例如“嗯”“呃”“那个”“就是”“然后然后”“很很”等。
+2. 修正明显口误和自我纠正。如果用户先说错又马上纠正，只保留纠正后的版本。
+3. 修正明显的语音识别错误，尤其是中文谐音错误、英文技术术语、人名、产品名和缩写，例如“配森”改为“Python”，“杰森”改为“JSON”，“扣的”在编程上下文中可改为“code”，“克劳德”可改为“Claude”，“叉 GPT”可改为“ChatGPT”。
+4. 整理中文标点，把过长句拆成更自然的短句；必要时用空行分段。
+5. 当文本里出现明显的并列项、对比项、步骤、优先级、条件、结论时，可以使用编号列表或项目符号，让结构更清楚。
+6. 规范数字、时间、金额、百分比、版本号和常见单位的书写，例如“周四上午十点”可整理为“周四上午 10:00”，“百分之六十四点七”可整理为“64.7%”。
+7. 对中英文混杂内容，保持技术名词、缩写、代码词、模型名、产品名可读；中文、英文、数字之间是否加空格以清晰自然为准，不要机械处理。
+
+排版规则：
+1. 如果原文是一个简短消息，不要强行分段或列表。
+2. 如果原文包含“作为对比”“分别是”“有几点”“第一/第二/第三”“步骤是”“优先级是”等结构信号，优先整理成分段或编号列表。
+3. 如果原文是在提出任务或需求，保留命令式和约束条件，可以适度换行，让要求更容易读。
+4. 如果原文是在写文章、评论、总结或说明，优先整理成自然段；只有确实存在枚举或对比时才列点。
+5. 不要额外添加标题，除非用户明确说了标题或原文显然已经在口述标题。
+
+硬性约束：
+1. 不要改变用户原意，不要添加用户没说过的新事实、新要求、新结论或新例子。
+2. 数字、金额、百分比、版本号、型号、日期、时间、排名、专有名词和人名必须特别保守；除非语音识别错误非常明显，否则不要擅自改动。
+3. 不要把不确定的品牌名、项目名、人名或模型名改成另一个看起来更常见的名字。
+4. 不要把简短聊天改得过度正式；保持原本语气，只让它更清楚、更可用。
+5. 如果无法可靠判断真实意图，选择更保守、更贴近原文的版本，不要为了看起来流畅而编造。
+6. 不要输出 Markdown 代码块或额外说明，只输出 JSON。
+
+评分规则：
+
+- 90-100：几乎确定，只有标点、排版、小幅纠错。
+- 85-89：可接受，有少量推断但上下文很明确。
+- 70-84：可能正确，但存在口音、同音词、专有名词或断句导致的不确定。
+- 0-69：不确定，可能误解了用户真实表达。
+
+当前第二阶段内置 system prompt 的核心内容如下：
+
+你是 JustSay 的第二阶段语音纠错审校器。第一阶段整理结果信心不足，现在你要重新判断用户真正想表达的内容。
+
+重点不是“照着 STT 原文改通顺”，而是根据 STT 原文、第一阶段结果、评分原因、文本内部上下文，反推用户最可能想输入的文本。
+
+第二阶段重点检查 STT 是否把英文技术词、模型名、产品名、人名、缩写、数字、版本号识别错；是否因为口音、音调、连读、断句，把词语切错、替换成近音词或同音词；第一阶段是否过度保守保留了明显不合理的识别错误；第一阶段是否过度改写添加了用户没说的内容；文本是否需要更自然的分段、列表、编号、标点或中英文排版。
+
+第二阶段可以比第一阶段更主动地修正明显语音识别错误，但仍不能添加新事实、新观点、新要求、新例子，不能改变用户语气、立场和核心含义。数字、金额、百分比、版本号、型号、日期、时间、排名、人名和专有名词除非上下文强烈支持，否则不要擅自改。如果无法判断，就选择最保守、最接近用户真实表达的版本。
+
+第二阶段同样只输出 JSON，格式为：
+
+{"text":"第二阶段最终文本","score":85,"reason":"简短说明评分原因"}
+
+6. Voice Actions 意图分流
+
+Voice Actions 是可选功能，默认关闭。开启后，它会在 STT 成功之后、LLM Refinement 和粘贴之前插入一个意图判断阶段。
+
+意图判断复用 LLM Chat Completions 配置，包括 LLM Base URL、API Key 和 Model。它不要求 LLM Refinement 本身开启，但要求 LLM API 配置完整。意图判断请求使用 temperature: 0.0，接口地址为 {LLM Base URL}/chat/completions。
+
+意图判断只允许返回以下结构化意图：
+
+- text_input
+- web_search
+- open_url
+- open_app
+- open_settings
+- open_logs
+- unsupported
+
+内置意图判断 prompt 采用保守策略：如果用户像是在输入文字、写消息、写文章、写 prompt、记录笔记、让模型优化文本或生成内容，就返回 text_input；只有用户明确表达搜索、查询、打开、启动、访问、打开设置、打开日志等动作时，才返回动作；模糊或不确定内容回退为 text_input。
+
+动作执行当前支持的范围是：
+
+- web_search：用默认浏览器打开 Bing 搜索结果页。
+- open_url：用默认浏览器打开 http/https URL；如果用户只说域名，会补 https://。
+- open_settings：打开 JustSay Settings 窗口。
+- open_logs：打开 JustSay 最新日志文件或日志目录。
+- open_app：打开本机应用名，执行前会弹出确认框；用户取消后不执行。
+
+open_app 只接受应用名称，不传命令参数，不执行 shell 片段、脚本、文件删除、系统控制、注册表修改等高风险动作。
+
+如果 Voice Actions 关闭、LLM 配置不完整、API 调用失败、JSON 解析失败、返回 unsupported，或动作执行失败，都会回退到当前普通输入流程，也就是继续 LLM Refinement 和粘贴，不丢弃 STT 原文。
+
+Voice Actions 会把 STT 原文、意图 JSON、动作结果或回退路径写入日志。悬浮窗调试区左侧显示识别内容，右侧显示意图、动作结果或回退原因。
+
+7. 录音悬浮窗
+
+录音和处理过程中会显示非激活、置顶的悬浮窗。悬浮窗不会抢占当前应用焦点。窗口使用 Win32 layered/no-activate 思路实现，底部显示胶囊状态条。
+
+胶囊内左侧是 5 根竖条波形，波形由实时麦克风 RMS 驱动，不是假动画。右侧显示当前状态、识别文本或处理状态。
+
+启用 LLM 调试显示时，胶囊上方会显示两块半透明黑色文本框：左侧显示 STT 识别内容，右侧显示 LLM 正在优化或优化后的内容。鼠标悬停在悬浮窗总区域内时，悬浮窗不会主动消失，方便阅读。
+
+8. 文本注入
+
+文本注入使用 Win32 Clipboard API 保存当前剪贴板内容，将待粘贴文本写入剪贴板，然后使用 SendInput 模拟 Ctrl+V。粘贴后会尽量恢复原剪贴板内容。
+
+粘贴前会 best-effort 切换到 US 键盘布局，并通过 IMM32 尝试关闭当前 IME 打开状态，减少中文、日文、韩文输入法对 Ctrl+V 的干扰。完成后会尽量恢复原键盘布局和 IME 状态。
+
+9. Settings 窗口
+
+Settings 窗口当前包含：
+
+- 当前热键显示
+- 热键预设下拉框
+- 录入热键按钮
+- STT Mode 下拉框
+- STT Base URL
+- STT API Key
+- STT Model
+- LLM Base URL
+- LLM API Key
+- LLM Model
+- Voice Actions 开关
+- Test LLM
+- Save
+
+API Key 输入框允许清空。保存后配置写入本地 TOML 文件。API Key 使用 Windows DPAPI 加密后写入配置文件。
+
+10. 配置、日志与统计
+
+配置文件路径为：
+
+%APPDATA%\JustSay\config.toml
+
+日志目录为：
+
+%LOCALAPPDATA%\JustSay\logs
+
+托盘菜单提供 Open Logs，用于打开最新日志或日志目录。
+
+日志使用 tracing 写入。录音、STT、LLM、Voice Actions、粘贴失败等状态会写入日志。启用 LLM Refinement 时，日志会记录 STT 原文、LLM 调用开始、第一阶段结果、第一阶段评分、第一阶段评分原因、是否进入第二阶段、第二阶段结果、第二阶段评分、第二阶段评分原因、最终文本或失败信息。启用 Voice Actions 时，日志会记录 STT 原文、意图 JSON、动作执行结果或回退路径。日志可能包含用户口述内容。
+
+托盘菜单会显示统计信息，包括录音次数、STT 成功/失败次数、最近音频时长、RMS 平均值、RMS 峰值、最近识别字符数、最终字符数、累计字符数、粘贴失败次数和最近错误。
+
+11. 开机自启动
+
+当前通过当前用户 Registry Run key 实现开机自启动开关，不需要管理员权限。
+
+12. 构建与发布
+
+项目使用 Rust stable，单 crate。主要依赖包括 windows-sys、cpal、serde、toml、reqwest、tokio、tracing、parking_lot、dirs、base64 等。
+
+构建目标是：
+
+x86_64-pc-windows-msvc
+
+可以使用：
+
+cargo build --release --target x86_64-pc-windows-msvc
+
+也可以使用 scripts/build.ps1。构建产物路径为：
+
+target\x86_64-pc-windows-msvc\release\justsay.exe
+
+项目包含 resources/app.manifest，声明 asInvoker 和 PerMonitorV2/PerMonitor DPI awareness。
+
+GitHub Actions release workflow 只在 tag 推送时触发。workflow 在 windows-latest 上构建 release exe，使用 UPX 压缩，并把 justsay.exe 本体作为 GitHub Release asset 上传。
+
+13. 当前明确没有实现的能力
+
+以下能力当前仓库没有实现，因此不要把它们写成已支持功能：
+
+- 本地 whisper.cpp / whisper-rs 识别后端
+- 流式 STT partial transcript
+- 独立安装器
+- 代码签名
+- Windows Credential Manager 保存 API Key
+- 真正的系统 Acrylic/Mica 材质

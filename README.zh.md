@@ -23,7 +23,8 @@ JustSay 是一个使用 Rust 编写的 Windows 10/11 系统托盘语音输入工
 - STT 兼容模式：
   - OpenAI 风格 `/audio/transcriptions`
   - 阿里云 Qwen-ASR `/chat/completions`
-- 可选 LLM refinement，用于整理口语化语音识别文本。
+- 可选 LLM refinement，用于整理口语化语音识别文本。第一遍会返回置信评分；低于 85 分时会进入第二阶段意图感知纠错，再输出最终文本。
+- 可选 Voice Actions 意图分流。开启后，明确的搜索、打开网址、打开 JustSay 设置/日志、打开本机应用等口述命令可以作为动作执行，而不是粘贴为文字。
 - 不抢焦点的置顶悬浮窗，包含真实 RMS 驱动的波形和可选的优化前后调试面板。
 - 使用 Win32 Clipboard API 和 `SendInput` 注入文本，并尽量恢复原剪贴板内容。
 - 粘贴前对输入法/键盘布局做 best-effort 处理，减少中文输入法干扰。
@@ -51,12 +52,14 @@ STT Base URL: https://dashscope.aliyuncs.com/compatible-mode/v1
 STT Model: qwen3-asr-flash
 ```
 
-LLM refinement 使用 OpenAI 兼容的 Chat Completions 接口。这里要填聊天模型，不要填 ASR 语音识别模型。
+LLM refinement 使用 OpenAI 兼容的 Chat Completions 接口。这里要填聊天模型，不要填 ASR 语音识别模型。Refiner 会要求模型返回包含纠错文本、置信评分和简短原因的 JSON；如果第一遍评分低于 85，JustSay 会结合 STT 原文和第一遍结果再做一次二阶段纠错。
 
 ```text
 LLM Base URL: https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM Model: 你账号可用的聊天模型
 ```
+
+Voice Actions 默认关闭。它复用 LLM Chat Completions 配置做保守意图判断；只要意图不明确，就回退到原来的优化并粘贴流程。
 
 配置文件位置：
 
@@ -76,7 +79,7 @@ API Key 写入本地配置前会使用 Windows DPAPI 加密。
 
 可以通过托盘菜单的 `Open Logs` 打开最新日志。
 
-启用 LLM refinement 后，日志会包含 STT 原文和 LLM 优化前后的文本，方便调试效果。如果日志里包含私人输入内容，不要公开分享。
+启用 LLM refinement 或 Voice Actions 后，日志可能包含口述文本、LLM 优化前后文本、优化评分、意图 JSON 和动作结果，方便调试效果。如果日志里包含私人输入内容，不要公开分享。
 
 ## 构建
 

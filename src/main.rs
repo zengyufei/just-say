@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod actions;
 mod app;
 mod audio;
 mod clipboard;
@@ -9,6 +10,7 @@ mod hotkey;
 mod i18n;
 mod ime;
 mod injector;
+mod intent;
 mod logger;
 mod overlay;
 mod refiner;

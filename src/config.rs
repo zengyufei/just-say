@@ -402,6 +402,11 @@ impl Default for LlmConfig {
     }
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ActionsConfig {
+    pub enabled: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
     pub language: Language,
@@ -409,6 +414,8 @@ pub struct Config {
     pub start_at_login: bool,
     pub stt: SttConfig,
     pub llm: LlmConfig,
+    #[serde(default)]
+    pub actions: ActionsConfig,
 }
 
 impl Default for Config {
@@ -419,6 +426,7 @@ impl Default for Config {
             start_at_login: false,
             stt: SttConfig::default(),
             llm: LlmConfig::default(),
+            actions: ActionsConfig::default(),
         }
     }
 }

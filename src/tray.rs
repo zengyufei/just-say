@@ -41,6 +41,7 @@ const CMD_HOTKEY_CTRL_SPACE: u32 = 1104;
 const CMD_HOTKEY_CUSTOM: u32 = 1105;
 const CMD_LLM_ENABLE: u32 = 1201;
 const CMD_LLM_SETTINGS: u32 = 1202;
+const CMD_ACTIONS_ENABLE: u32 = 1203;
 const CMD_SETTINGS: u32 = 1301;
 const CMD_STARTUP: u32 = 1302;
 const CMD_OPEN_LOGS: u32 = 1303;
@@ -230,6 +231,18 @@ unsafe fn show_tray_menu(hwnd: HWND) {
             truncate_menu_text(&config.llm.model, 42)
         ),
     );
+    append_disabled(
+        menu,
+        &format!(
+            "{}: {}",
+            ui.voice_actions,
+            if config.actions.enabled {
+                ui.enabled
+            } else {
+                ui.disabled
+            }
+        ),
+    );
     for line in stats_menu_lines(&config.language, &controller.stats()) {
         append_disabled(menu, &line);
     }
@@ -337,6 +350,12 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     );
 
     append_checked(menu, CMD_STARTUP, ui.start_at_login, config.start_at_login);
+    append_checked(
+        menu,
+        CMD_ACTIONS_ENABLE,
+        ui.voice_actions,
+        config.actions.enabled,
+    );
     AppendMenuW(
         menu,
         MF_STRING,
@@ -466,6 +485,7 @@ fn handle_command(cmd: i32) {
         CMD_HOTKEY_CTRL_SPACE => controller.set_hotkey(Hotkey::CtrlSpace),
         CMD_HOTKEY_CUSTOM => crate::settings::show(controller.clone()),
         CMD_LLM_ENABLE => controller.set_llm_enabled(!controller.config().llm.enabled),
+        CMD_ACTIONS_ENABLE => controller.set_actions_enabled(!controller.config().actions.enabled),
         CMD_LLM_SETTINGS | CMD_SETTINGS => crate::settings::show(controller.clone()),
         CMD_OPEN_LOGS => open_logs(),
         CMD_STARTUP => controller.set_start_at_login(!controller.config().start_at_login),
@@ -478,7 +498,7 @@ fn handle_command(cmd: i32) {
     }
 }
 
-fn open_logs() {
+pub fn open_logs() {
     match crate::util::latest_log_file().or_else(|_| crate::util::app_log_dir()) {
         Ok(path) => unsafe {
             let path = wide_null(path.as_os_str());

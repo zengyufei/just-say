@@ -11,17 +11,18 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowTextLengthW,
     GetWindowTextW, MessageBoxW, RegisterClassW, SendMessageW, SetWindowTextW, ShowWindow,
-    CBN_SELCHANGE, CBS_DROPDOWNLIST, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CW_USEDEFAULT,
-    ES_AUTOHSCROLL, ES_PASSWORD, HMENU, MB_ICONERROR, MB_ICONINFORMATION, SW_SHOW, WM_CLOSE,
-    WM_COMMAND, WM_CREATE, WM_NCDESTROY, WNDCLASSW, WS_BORDER, WS_CAPTION, WS_CHILD,
-    WS_EX_DLGMODALFRAME, WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE, WS_VSCROLL,
+    BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, CBN_SELCHANGE, CBS_DROPDOWNLIST, CB_ADDSTRING,
+    CB_GETCURSEL, CB_SETCURSEL, CW_USEDEFAULT, ES_AUTOHSCROLL, ES_PASSWORD, HMENU, MB_ICONERROR,
+    MB_ICONINFORMATION, SW_SHOW, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_NCDESTROY, WNDCLASSW,
+    WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_DLGMODALFRAME, WS_OVERLAPPED, WS_SYSMENU, WS_VISIBLE,
+    WS_VSCROLL,
 };
 
 const CLASS_NAME: &str = "JustSaySettingsWindow";
 const WINDOW_EX_STYLE: u32 = WS_EX_DLGMODALFRAME;
 const WINDOW_STYLE: u32 = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
 const CLIENT_WIDTH: i32 = 520;
-const CLIENT_HEIGHT: i32 = 470;
+const CLIENT_HEIGHT: i32 = 520;
 const ID_BASE: isize = 101;
 const ID_KEY: isize = 102;
 const ID_MODEL: isize = 103;
@@ -31,6 +32,7 @@ const ID_STT_MODEL: isize = 113;
 const ID_STT_COMPAT: isize = 114;
 const ID_HOTKEY: isize = 115;
 const ID_HOTKEY_CAPTURE: isize = 116;
+const ID_ACTIONS_ENABLED: isize = 117;
 const ID_TEST: isize = 201;
 const ID_SAVE: isize = 202;
 
@@ -47,6 +49,7 @@ struct SettingsState {
     base_edit: isize,
     key_edit: isize,
     model_edit: isize,
+    actions_checkbox: isize,
     pending_hotkey: Option<Hotkey>,
     controller: Option<Arc<AppController>>,
 }
@@ -225,6 +228,7 @@ unsafe extern "system" fn wnd_proc(
                 lock.base_edit = 0;
                 lock.key_edit = 0;
                 lock.model_edit = 0;
+                lock.actions_checkbox = 0;
                 lock.pending_hotkey = None;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -245,6 +249,7 @@ unsafe fn create_controls(hwnd: HWND) {
     label(hwnd, ui.llm_base_url, 20, 286);
     label(hwnd, ui.llm_api_key, 20, 330);
     label(hwnd, ui.llm_model, 20, 374);
+    label(hwnd, ui.voice_actions, 20, 418);
     let hotkey_preview = static_text(hwnd, 140, 20, 220, 24, true);
     let hotkey_capture_button =
         button(hwnd, ID_HOTKEY_CAPTURE, ui.capture_hotkey, 370, 20, 110, 28);
@@ -256,8 +261,9 @@ unsafe fn create_controls(hwnd: HWND) {
     let base = edit(hwnd, ID_BASE, 140, 282, 340, 24, false);
     let key = edit(hwnd, ID_KEY, 140, 326, 340, 24, true);
     let model = edit(hwnd, ID_MODEL, 140, 370, 340, 24, false);
-    button(hwnd, ID_TEST, ui.test_llm, 270, 424, 100, 30);
-    button(hwnd, ID_SAVE, ui.save, 390, 424, 90, 30);
+    let actions_checkbox = checkbox(hwnd, ID_ACTIONS_ENABLED, ui.enable, 140, 414, 120, 28);
+    button(hwnd, ID_TEST, ui.test_llm, 270, 474, 100, 30);
+    button(hwnd, ID_SAVE, ui.save, 390, 474, 90, 30);
     if let Some(state) = STATE.get() {
         let mut lock = state.lock();
         lock.hotkey_combo = hotkey as isize;
@@ -270,6 +276,7 @@ unsafe fn create_controls(hwnd: HWND) {
         lock.base_edit = base as isize;
         lock.key_edit = key as isize;
         lock.model_edit = model as isize;
+        lock.actions_checkbox = actions_checkbox as isize;
     }
 }
 
@@ -329,6 +336,12 @@ fn populate_from_config(controller: &Arc<AppController>) {
                 lock.model_edit as HWND,
                 wide_null(config.llm.model).as_ptr(),
             );
+            SendMessageW(
+                lock.actions_checkbox as HWND,
+                BM_SETCHECK,
+                usize::from(config.actions.enabled),
+                0,
+            );
         }
     }
 }
@@ -363,6 +376,8 @@ fn save_current() {
     let base = get_text(lock.base_edit as HWND);
     let key = get_text(lock.key_edit as HWND);
     let model = get_text(lock.model_edit as HWND);
+    let actions_enabled =
+        unsafe { SendMessageW(lock.actions_checkbox as HWND, BM_GETCHECK, 0, 0) } != 0;
     drop(lock);
     controller.set_hotkey(hotkey);
     match controller.update_api_settings(ApiSettingsInput {
@@ -373,6 +388,7 @@ fn save_current() {
         llm_api_base_url: base,
         llm_model: model,
         llm_api_key_plain: key,
+        actions_enabled,
     }) {
         Ok(()) => show_message("Settings", "Saved"),
         Err(err) => show_message("Settings", &format!("Failed: {err}")),
@@ -622,6 +638,23 @@ unsafe fn button(parent: HWND, id: isize, text: &str, x: i32, y: i32, w: i32, h:
         wide_null("BUTTON").as_ptr(),
         wide_null(text).as_ptr(),
         WS_CHILD | WS_VISIBLE,
+        x,
+        y,
+        w,
+        h,
+        parent,
+        id as HMENU,
+        GetModuleHandleW(std::ptr::null()),
+        std::ptr::null(),
+    )
+}
+
+unsafe fn checkbox(parent: HWND, id: isize, text: &str, x: i32, y: i32, w: i32, h: i32) -> HWND {
+    CreateWindowExW(
+        0,
+        wide_null("BUTTON").as_ptr(),
+        wide_null(text).as_ptr(),
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX as u32,
         x,
         y,
         w,

@@ -23,7 +23,8 @@ Hold a global hotkey to record. Release the hotkey to transcribe speech, optiona
 - STT compatibility modes:
   - OpenAI-style `/audio/transcriptions`
   - Aliyun Qwen-ASR `/chat/completions`
-- Optional LLM refinement for cleaning up speech transcripts.
+- Optional LLM refinement for cleaning up speech transcripts. The first pass returns a confidence score; scores below 85 trigger a second intent-aware correction pass before paste.
+- Optional Voice Actions intent routing. When enabled, clear commands such as web search, open URL, open JustSay settings/logs, or opening a local app can run as actions instead of being pasted as text.
 - Non-activating always-on-top overlay with RMS-driven waveform and optional before/after debug panels.
 - Clipboard-preserving text injection using Win32 Clipboard API and `SendInput`.
 - Best-effort IME/layout handling before paste.
@@ -51,12 +52,14 @@ STT Base URL: https://dashscope.aliyuncs.com/compatible-mode/v1
 STT Model: qwen3-asr-flash
 ```
 
-LLM refinement uses an OpenAI-compatible Chat Completions endpoint. Use a chat model, not an ASR model.
+LLM refinement uses an OpenAI-compatible Chat Completions endpoint. Use a chat model, not an ASR model. The refiner asks the model to return JSON with corrected text, a confidence score, and a short reason. If the first score is below 85, JustSay runs a second pass that re-evaluates likely speech recognition errors from the original STT text and first-pass result.
 
 ```text
 LLM Base URL: https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM Model: a chat model available in your account
 ```
+
+Voice Actions is disabled by default. It reuses the LLM Chat Completions settings for conservative intent classification. If the intent is unclear, the app falls back to the normal refine-and-paste flow.
 
 Configuration is stored in:
 
@@ -76,7 +79,7 @@ Logs are written to:
 
 Use the tray menu item `Open Logs` to open the latest log file.
 
-When LLM refinement is enabled, logs include the STT transcript and the LLM before/after text for debugging. Do not share logs publicly if they contain private dictated content.
+When LLM refinement or Voice Actions are enabled, logs can include dictated text, LLM before/after text, refinement scores, intent JSON, and action results for debugging. Do not share logs publicly if they contain private dictated content.
 
 ## Build
 
