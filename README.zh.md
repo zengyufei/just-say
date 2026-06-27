@@ -6,10 +6,16 @@ JustSay 是一个使用 Rust 编写的 Windows 10/11 系统托盘语音输入工
 
 [English README](README.md)
 
+## 截图
+
+![JustSay 使用效果](screenshot/用法.png)
+
+![JustSay 设置窗口](screenshot/设置.png)
+
 ## 功能
 
 - 系统托盘常驻运行，不显示普通任务栏窗口。
-- Press-to-Talk 全局热键：Right Ctrl、CapsLock、Right Alt、Ctrl+Space。
+- Press-to-Talk 全局热键支持预设和自定义录入：Right Ctrl、CapsLock、Right Alt、Ctrl+Space、F13、Pause 以及修饰键组合。
 - 默认不使用 Fn 键，因为 Windows 通常无法稳定捕获 Fn 键。
 - 使用 `cpal` 采集麦克风音频，并转换为 16 kHz mono WAV 供 STT 后端使用。
 - 默认识别语言为简体中文 `zh-CN`。

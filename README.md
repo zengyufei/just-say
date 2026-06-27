@@ -6,10 +6,16 @@ Hold a global hotkey to record. Release the hotkey to transcribe speech, optiona
 
 [中文说明](README.zh.md)
 
+## Screenshots
+
+![JustSay usage overlay](screenshot/用法.png)
+
+![JustSay settings window](screenshot/设置.png)
+
 ## Features
 
 - System tray app with no normal taskbar window.
-- Press-to-talk global hotkeys: Right Ctrl, CapsLock, Right Alt, Ctrl+Space.
+- Press-to-talk global hotkeys with presets and custom recording: Right Ctrl, CapsLock, Right Alt, Ctrl+Space, F13, Pause, and modifier combinations.
 - Fn is not used as the default hotkey because Windows usually cannot reliably capture Fn keys.
 - Microphone capture via `cpal`, converted to 16 kHz mono WAV for STT backends.
 - Default recognition language: Simplified Chinese (`zh-CN`).
