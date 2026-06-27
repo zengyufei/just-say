@@ -15,7 +15,23 @@ pub struct AppController {
     recorder: Mutex<Option<Recorder>>,
     busy: AtomicBool,
     status: Mutex<String>,
+    stats: Mutex<AppStats>,
     runtime: tokio::runtime::Runtime,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AppStats {
+    pub recordings: u64,
+    pub stt_successes: u64,
+    pub stt_failures: u64,
+    pub paste_failures: u64,
+    pub total_final_chars: u64,
+    pub last_duration_ms: u64,
+    pub last_rms_avg: f32,
+    pub last_rms_peak: f32,
+    pub last_stt_chars: usize,
+    pub last_final_chars: usize,
+    pub last_error: Option<String>,
 }
 
 pub struct ApiSettingsInput {
@@ -40,6 +56,7 @@ impl AppController {
             recorder: Mutex::new(None),
             busy: AtomicBool::new(false),
             status: Mutex::new(status),
+            stats: Mutex::new(AppStats::default()),
             runtime,
         }
     }
@@ -90,6 +107,14 @@ impl AppController {
             rms_peak = audio.rms_peak,
             "recording stopped"
         );
+        {
+            let mut stats = self.stats.lock();
+            stats.recordings += 1;
+            stats.last_duration_ms = audio.duration_ms;
+            stats.last_rms_avg = audio.rms_avg;
+            stats.last_rms_peak = audio.rms_peak;
+            stats.last_error = None;
+        }
         maybe_save_debug_audio(&audio);
 
         let controller = Arc::clone(self);
@@ -122,13 +147,29 @@ impl AppController {
             Ok(text) => text,
             Err(err) => {
                 tracing::error!(%err, "STT failed");
+                {
+                    let mut stats = self.stats.lock();
+                    stats.stt_failures += 1;
+                    stats.last_error = Some(format!("STT failed: {err}"));
+                }
                 self.fail("识别失败", "STT failed");
                 return;
             }
         };
         if raw_text.is_empty() {
+            {
+                let mut stats = self.stats.lock();
+                stats.stt_failures += 1;
+                stats.last_error = Some("No transcript".to_string());
+            }
             self.fail("未识别到文字", "No transcript");
             return;
+        }
+        {
+            let mut stats = self.stats.lock();
+            stats.stt_successes += 1;
+            stats.last_stt_chars = raw_text.chars().count();
+            stats.last_error = None;
         }
         tracing::info!(stt_transcript_before_llm = %raw_text, "stt_transcript_before_llm");
         crate::overlay::set_text(&raw_text);
@@ -197,8 +238,21 @@ impl AppController {
         crate::overlay::set_text("Pasting...");
         if let Err(err) = crate::injector::paste_text(&final_text) {
             tracing::error!(%err, "text injection failed");
+            {
+                let mut stats = self.stats.lock();
+                stats.paste_failures += 1;
+                stats.last_final_chars = final_text.chars().count();
+                stats.last_error = Some(format!("Paste failed: {err}"));
+            }
             self.fail("粘贴失败", "Paste failed");
             return;
+        }
+        {
+            let mut stats = self.stats.lock();
+            let final_chars = final_text.chars().count();
+            stats.last_final_chars = final_chars;
+            stats.total_final_chars += final_chars as u64;
+            stats.last_error = None;
         }
         self.set_status("Ready");
         crate::overlay::set_text("Done");
@@ -224,6 +278,10 @@ impl AppController {
 
     pub fn status(&self) -> String {
         self.status.lock().clone()
+    }
+
+    pub fn stats(&self) -> AppStats {
+        self.stats.lock().clone()
     }
 
     pub fn config(&self) -> Config {

@@ -57,6 +57,25 @@ impl Hotkey {
             Self::FnScanCode { scan_code } => format!("Fn scan code 0x{scan_code:x}"),
         }
     }
+
+    pub fn from_combo_index(index: isize) -> Self {
+        match index {
+            1 => Self::CapsLock,
+            2 => Self::RightAlt,
+            3 => Self::CtrlSpace,
+            _ => Self::RightCtrl,
+        }
+    }
+
+    pub fn combo_index(&self) -> usize {
+        match self {
+            Self::RightCtrl => 0,
+            Self::CapsLock => 1,
+            Self::RightAlt => 2,
+            Self::CtrlSpace => 3,
+            Self::FnScanCode { .. } => 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -183,6 +183,37 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     let llm_menu = CreatePopupMenu();
 
     append_disabled(menu, &format!("Status: {}", controller.status()));
+    append_disabled(
+        menu,
+        &format!(
+            "Mic: {}",
+            truncate_menu_text(&crate::audio::default_input_device_name(), 64)
+        ),
+    );
+    append_disabled(menu, &format!("Hotkey: {}", config.hotkey.display_name()));
+    append_disabled(
+        menu,
+        &format!(
+            "STT: {} / {}",
+            config.stt.compatibility.display_name(),
+            truncate_menu_text(&config.stt.model, 42)
+        ),
+    );
+    append_disabled(
+        menu,
+        &format!(
+            "LLM: {} / {}",
+            if config.llm.enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            },
+            truncate_menu_text(&config.llm.model, 42)
+        ),
+    );
+    for line in stats_menu_lines(&controller.stats()) {
+        append_disabled(menu, &line);
+    }
     AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
 
     append_checked(
@@ -323,6 +354,44 @@ unsafe fn append_checked(menu: HMENU, id: u32, text: &str, checked: bool) {
         flags |= MF_CHECKED;
     }
     AppendMenuW(menu, flags, id as usize, wide_null(text).as_ptr());
+}
+
+fn stats_menu_lines(stats: &crate::app::AppStats) -> Vec<String> {
+    let mut lines = vec![
+        format!(
+            "Stats: {} recordings, {} STT ok, {} STT failed",
+            stats.recordings, stats.stt_successes, stats.stt_failures
+        ),
+        format!(
+            "Last audio: {:.1}s, RMS avg {:.4}, peak {:.4}",
+            stats.last_duration_ms as f32 / 1000.0,
+            stats.last_rms_avg,
+            stats.last_rms_peak
+        ),
+        format!(
+            "Text: last STT {} chars, final {} chars, total {} chars",
+            stats.last_stt_chars, stats.last_final_chars, stats.total_final_chars
+        ),
+    ];
+    if stats.paste_failures > 0 {
+        lines.push(format!("Paste failures: {}", stats.paste_failures));
+    }
+    if let Some(error) = &stats.last_error {
+        lines.push(format!("Last error: {}", truncate_menu_text(error, 80)));
+    }
+    lines
+}
+
+fn truncate_menu_text(value: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (idx, ch) in value.chars().enumerate() {
+        if idx >= max_chars {
+            out.push('…');
+            return out;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn handle_command(cmd: i32) {

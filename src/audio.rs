@@ -5,6 +5,17 @@ use std::sync::Arc;
 
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
 
+pub fn default_input_device_name() -> String {
+    let host = cpal::default_host();
+    match host.default_input_device() {
+        Some(device) => device.name().unwrap_or_else(|err| {
+            tracing::warn!(%err, "failed to read default input device name");
+            "Unknown microphone".to_string()
+        }),
+        None => "No input device".to_string(),
+    }
+}
+
 #[derive(Debug)]
 pub struct AudioChunk {
     pub wav_bytes: Vec<u8>,
