@@ -1,6 +1,7 @@
 use crate::{
     app::{ApiSettingsInput, AppController},
     config::{Hotkey, Language, SttCompatibility},
+    hotkey::{CAPTURE_CANCEL, CAPTURE_OK, WM_HOTKEY_CAPTURED},
     util::{string_from_wide, wide_null},
 };
 use parking_lot::Mutex;
@@ -20,7 +21,7 @@ const CLASS_NAME: &str = "JustSaySettingsWindow";
 const WINDOW_EX_STYLE: u32 = WS_EX_DLGMODALFRAME;
 const WINDOW_STYLE: u32 = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
 const CLIENT_WIDTH: i32 = 520;
-const CLIENT_HEIGHT: i32 = 438;
+const CLIENT_HEIGHT: i32 = 470;
 const ID_BASE: isize = 101;
 const ID_KEY: isize = 102;
 const ID_MODEL: isize = 103;
@@ -29,6 +30,7 @@ const ID_STT_KEY: isize = 112;
 const ID_STT_MODEL: isize = 113;
 const ID_STT_COMPAT: isize = 114;
 const ID_HOTKEY: isize = 115;
+const ID_HOTKEY_CAPTURE: isize = 116;
 const ID_TEST: isize = 201;
 const ID_SAVE: isize = 202;
 
@@ -36,6 +38,8 @@ const ID_SAVE: isize = 202;
 struct SettingsState {
     hwnd: isize,
     hotkey_combo: isize,
+    hotkey_preview: isize,
+    hotkey_capture_button: isize,
     stt_compat_combo: isize,
     stt_base_edit: isize,
     stt_key_edit: isize,
@@ -43,6 +47,7 @@ struct SettingsState {
     base_edit: isize,
     key_edit: isize,
     model_edit: isize,
+    pending_hotkey: Option<Hotkey>,
     controller: Option<Arc<AppController>>,
 }
 
@@ -189,11 +194,17 @@ unsafe extern "system" fn wnd_proc(
             let id = (wparam & 0xffff) as isize;
             let notify = ((wparam >> 16) & 0xffff) as u32;
             match id {
+                ID_HOTKEY if notify == CBN_SELCHANGE => apply_hotkey_preset(),
+                ID_HOTKEY_CAPTURE => begin_hotkey_capture(hwnd),
                 ID_STT_COMPAT if notify == CBN_SELCHANGE => apply_stt_preset(),
                 ID_TEST => test_current(),
                 ID_SAVE => save_current(),
                 _ => {}
             }
+            0
+        }
+        WM_HOTKEY_CAPTURED => {
+            finish_hotkey_capture(wparam);
             0
         }
         WM_CLOSE => {
@@ -205,6 +216,8 @@ unsafe extern "system" fn wnd_proc(
                 let mut lock = state.lock();
                 lock.hwnd = 0;
                 lock.hotkey_combo = 0;
+                lock.hotkey_preview = 0;
+                lock.hotkey_capture_button = 0;
                 lock.stt_compat_combo = 0;
                 lock.stt_base_edit = 0;
                 lock.stt_key_edit = 0;
@@ -212,6 +225,7 @@ unsafe extern "system" fn wnd_proc(
                 lock.base_edit = 0;
                 lock.key_edit = 0;
                 lock.model_edit = 0;
+                lock.pending_hotkey = None;
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
@@ -223,26 +237,32 @@ unsafe fn create_controls(hwnd: HWND) {
     let language = current_language();
     let ui = crate::i18n::UiText::for_language(&language);
     label(hwnd, ui.hotkey, 20, 24);
-    label(hwnd, ui.stt_mode, 20, 68);
-    label(hwnd, ui.stt_base_url, 20, 112);
-    label(hwnd, ui.stt_api_key, 20, 156);
-    label(hwnd, ui.stt_model, 20, 200);
-    label(hwnd, ui.llm_base_url, 20, 254);
-    label(hwnd, ui.llm_api_key, 20, 298);
-    label(hwnd, ui.llm_model, 20, 342);
-    let hotkey = hotkey_combo(hwnd, ID_HOTKEY, 140, 20, 340, 120);
-    let stt_compat = stt_combo(hwnd, ID_STT_COMPAT, 140, 64, 340, 120);
-    let stt_base = edit(hwnd, ID_STT_BASE, 140, 108, 340, 24, false);
-    let stt_key = edit(hwnd, ID_STT_KEY, 140, 152, 340, 24, true);
-    let stt_model = edit(hwnd, ID_STT_MODEL, 140, 196, 340, 24, false);
-    let base = edit(hwnd, ID_BASE, 140, 250, 340, 24, false);
-    let key = edit(hwnd, ID_KEY, 140, 294, 340, 24, true);
-    let model = edit(hwnd, ID_MODEL, 140, 338, 340, 24, false);
-    button(hwnd, ID_TEST, ui.test_llm, 270, 384, 100, 30);
-    button(hwnd, ID_SAVE, ui.save, 390, 384, 90, 30);
+    label(hwnd, ui.hotkey_preset, 20, 56);
+    label(hwnd, ui.stt_mode, 20, 100);
+    label(hwnd, ui.stt_base_url, 20, 144);
+    label(hwnd, ui.stt_api_key, 20, 188);
+    label(hwnd, ui.stt_model, 20, 232);
+    label(hwnd, ui.llm_base_url, 20, 286);
+    label(hwnd, ui.llm_api_key, 20, 330);
+    label(hwnd, ui.llm_model, 20, 374);
+    let hotkey_preview = static_text(hwnd, 140, 20, 220, 24, true);
+    let hotkey_capture_button =
+        button(hwnd, ID_HOTKEY_CAPTURE, ui.capture_hotkey, 370, 20, 110, 28);
+    let hotkey = hotkey_combo(hwnd, ID_HOTKEY, 140, 52, 340, 120);
+    let stt_compat = stt_combo(hwnd, ID_STT_COMPAT, 140, 96, 340, 120);
+    let stt_base = edit(hwnd, ID_STT_BASE, 140, 140, 340, 24, false);
+    let stt_key = edit(hwnd, ID_STT_KEY, 140, 184, 340, 24, true);
+    let stt_model = edit(hwnd, ID_STT_MODEL, 140, 228, 340, 24, false);
+    let base = edit(hwnd, ID_BASE, 140, 282, 340, 24, false);
+    let key = edit(hwnd, ID_KEY, 140, 326, 340, 24, true);
+    let model = edit(hwnd, ID_MODEL, 140, 370, 340, 24, false);
+    button(hwnd, ID_TEST, ui.test_llm, 270, 424, 100, 30);
+    button(hwnd, ID_SAVE, ui.save, 390, 424, 90, 30);
     if let Some(state) = STATE.get() {
         let mut lock = state.lock();
         lock.hotkey_combo = hotkey as isize;
+        lock.hotkey_preview = hotkey_preview as isize;
+        lock.hotkey_capture_button = hotkey_capture_button as isize;
         lock.stt_compat_combo = stt_compat as isize;
         lock.stt_base_edit = stt_base as isize;
         lock.stt_key_edit = stt_key as isize;
@@ -264,13 +284,18 @@ fn populate_from_config(controller: &Arc<AppController>) {
         .flatten()
         .unwrap_or_default();
     if let Some(state) = STATE.get() {
-        let lock = state.lock();
+        let mut lock = state.lock();
+        lock.pending_hotkey = Some(config.hotkey.clone());
         unsafe {
             SendMessageW(
                 lock.hotkey_combo as HWND,
                 CB_SETCURSEL,
-                config.hotkey.combo_index(),
+                config.hotkey.combo_index() as usize,
                 0,
+            );
+            SetWindowTextW(
+                lock.hotkey_preview as HWND,
+                wide_null(crate::i18n::hotkey_label(&config.language, &config.hotkey)).as_ptr(),
             );
             SetWindowTextW(
                 lock.stt_compat_combo as HWND,
@@ -327,7 +352,10 @@ fn save_current() {
     let Some(controller) = lock.controller.clone() else {
         return;
     };
-    let hotkey = selected_hotkey(lock.hotkey_combo as HWND);
+    let hotkey = lock
+        .pending_hotkey
+        .clone()
+        .unwrap_or_else(|| selected_hotkey(lock.hotkey_combo as HWND));
     let stt_compat = selected_stt_compatibility(lock.stt_compat_combo as HWND);
     let stt_base = get_text(lock.stt_base_edit as HWND);
     let stt_key = get_text(lock.stt_key_edit as HWND);
@@ -368,6 +396,70 @@ fn selected_stt_compatibility(hwnd: HWND) -> SttCompatibility {
 fn selected_hotkey(hwnd: HWND) -> Hotkey {
     let index = unsafe { SendMessageW(hwnd, CB_GETCURSEL, 0, 0) };
     Hotkey::from_combo_index(index)
+}
+
+fn apply_hotkey_preset() {
+    let Some(state) = STATE.get() else { return };
+    let mut lock = state.lock();
+    let index = unsafe { SendMessageW(lock.hotkey_combo as HWND, CB_GETCURSEL, 0, 0) };
+    if index == 4 {
+        return;
+    }
+    let hotkey = Hotkey::from_combo_index(index);
+    lock.pending_hotkey = Some(hotkey.clone());
+    update_hotkey_preview(&lock, &hotkey);
+}
+
+fn begin_hotkey_capture(hwnd: HWND) {
+    let language = current_language();
+    let ui = crate::i18n::UiText::for_language(&language);
+    match crate::hotkey::begin_capture(hwnd) {
+        Ok(()) => {
+            if let Some(state) = STATE.get() {
+                let lock = state.lock();
+                unsafe {
+                    SetWindowTextW(
+                        lock.hotkey_preview as HWND,
+                        wide_null(ui.press_hotkey).as_ptr(),
+                    );
+                }
+            }
+        }
+        Err(err) => show_message("Settings", &format!("Failed: {err}")),
+    }
+}
+
+fn finish_hotkey_capture(result: WPARAM) {
+    let Some(state) = STATE.get() else { return };
+    let mut lock = state.lock();
+    if result == CAPTURE_OK {
+        if let Some(hotkey) = crate::hotkey::take_captured_hotkey() {
+            lock.pending_hotkey = Some(hotkey.clone());
+            unsafe {
+                SendMessageW(
+                    lock.hotkey_combo as HWND,
+                    CB_SETCURSEL,
+                    hotkey.combo_index() as usize,
+                    0,
+                );
+            }
+            update_hotkey_preview(&lock, &hotkey);
+        }
+    } else if result == CAPTURE_CANCEL {
+        if let Some(hotkey) = &lock.pending_hotkey {
+            update_hotkey_preview(&lock, hotkey);
+        }
+    }
+}
+
+fn update_hotkey_preview(lock: &SettingsState, hotkey: &Hotkey) {
+    let language = current_language();
+    unsafe {
+        SetWindowTextW(
+            lock.hotkey_preview as HWND,
+            wide_null(crate::i18n::hotkey_label(&language, hotkey)).as_ptr(),
+        );
+    }
 }
 
 fn apply_stt_preset() {
@@ -415,6 +507,23 @@ unsafe fn label(parent: HWND, text: &str, x: i32, y: i32) {
         GetModuleHandleW(std::ptr::null()),
         std::ptr::null(),
     );
+}
+
+unsafe fn static_text(parent: HWND, x: i32, y: i32, w: i32, h: i32, border: bool) -> HWND {
+    CreateWindowExW(
+        0,
+        wide_null("STATIC").as_ptr(),
+        wide_null("").as_ptr(),
+        WS_CHILD | WS_VISIBLE | if border { WS_BORDER } else { 0 },
+        x,
+        y,
+        w,
+        h,
+        parent,
+        std::ptr::null_mut(),
+        GetModuleHandleW(std::ptr::null()),
+        std::ptr::null(),
+    )
 }
 
 unsafe fn edit(parent: HWND, id: isize, x: i32, y: i32, w: i32, h: i32, password: bool) -> HWND {
@@ -485,14 +594,29 @@ unsafe fn hotkey_combo(parent: HWND, id: isize, x: i32, y: i32, w: i32, h: i32) 
         Hotkey::CapsLock,
         Hotkey::RightAlt,
         Hotkey::CtrlSpace,
+        Hotkey::Custom {
+            trigger_vk: 0x7c,
+            trigger_scan_code: 0,
+            extended: false,
+            modifiers: Default::default(),
+        },
     ] {
-        let label = wide_null(crate::i18n::hotkey_label(&language, &item));
+        let text = if item.is_custom_like() {
+            match language {
+                Language::ZhCn => "自定义...".to_string(),
+                Language::ZhTw => "自訂...".to_string(),
+                _ => "Custom...".to_string(),
+            }
+        } else {
+            crate::i18n::hotkey_label(&language, &item)
+        };
+        let label = wide_null(text);
         SendMessageW(hwnd, CB_ADDSTRING, 0, label.as_ptr() as LPARAM);
     }
     hwnd
 }
 
-unsafe fn button(parent: HWND, id: isize, text: &str, x: i32, y: i32, w: i32, h: i32) {
+unsafe fn button(parent: HWND, id: isize, text: &str, x: i32, y: i32, w: i32, h: i32) -> HWND {
     CreateWindowExW(
         0,
         wide_null("BUTTON").as_ptr(),
@@ -506,5 +630,5 @@ unsafe fn button(parent: HWND, id: isize, text: &str, x: i32, y: i32, w: i32, h:
         id as HMENU,
         GetModuleHandleW(std::ptr::null()),
         std::ptr::null(),
-    );
+    )
 }

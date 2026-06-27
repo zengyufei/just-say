@@ -38,6 +38,7 @@ const CMD_HOTKEY_RCTRL: u32 = 1101;
 const CMD_HOTKEY_CAPS: u32 = 1102;
 const CMD_HOTKEY_RALT: u32 = 1103;
 const CMD_HOTKEY_CTRL_SPACE: u32 = 1104;
+const CMD_HOTKEY_CUSTOM: u32 = 1105;
 const CMD_LLM_ENABLE: u32 = 1201;
 const CMD_LLM_SETTINGS: u32 = 1202;
 const CMD_SETTINGS: u32 = 1301;
@@ -295,6 +296,16 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         &crate::i18n::hotkey_label(&config.language, &Hotkey::CtrlSpace),
         config.hotkey == Hotkey::CtrlSpace,
     );
+    append_checked(
+        hotkey_menu,
+        CMD_HOTKEY_CUSTOM,
+        match config.language {
+            Language::ZhCn => "自定义...",
+            Language::ZhTw => "自訂...",
+            _ => "Custom...",
+        },
+        config.hotkey.is_custom_like(),
+    );
     AppendMenuW(
         menu,
         MF_POPUP,
@@ -453,6 +464,7 @@ fn handle_command(cmd: i32) {
         CMD_HOTKEY_CAPS => controller.set_hotkey(Hotkey::CapsLock),
         CMD_HOTKEY_RALT => controller.set_hotkey(Hotkey::RightAlt),
         CMD_HOTKEY_CTRL_SPACE => controller.set_hotkey(Hotkey::CtrlSpace),
+        CMD_HOTKEY_CUSTOM => crate::settings::show(controller.clone()),
         CMD_LLM_ENABLE => controller.set_llm_enabled(!controller.config().llm.enabled),
         CMD_LLM_SETTINGS | CMD_SETTINGS => crate::settings::show(controller.clone()),
         CMD_OPEN_LOGS => open_logs(),
