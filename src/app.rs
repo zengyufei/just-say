@@ -81,9 +81,9 @@ impl AppController {
         }
     }
 
-    pub fn start_recording(self: &Arc<Self>) {
+    pub fn start_recording(self: &Arc<Self>) -> bool {
         if self.busy.swap(true, Ordering::SeqCst) {
-            return;
+            return false;
         }
         tracing::info!("recording started");
         crate::overlay::show("正在聆听...");
@@ -94,19 +94,18 @@ impl AppController {
             Ok(recorder) => {
                 *self.recorder.lock() = Some(recorder);
                 self.set_status("Recording");
+                true
             }
             Err(err) => {
                 tracing::error!(%err, "failed to start microphone recording");
-                crate::overlay::set_text("麦克风不可用");
-                self.set_status("Microphone unavailable");
-                self.busy.store(false, Ordering::SeqCst);
+                self.fail("麦克风不可用", "Microphone unavailable");
+                false
             }
         }
     }
 
     pub fn stop_recording(self: &Arc<Self>) {
         let Some(recorder) = self.recorder.lock().take() else {
-            self.busy.store(false, Ordering::SeqCst);
             return;
         };
         crate::overlay::set_text("Transcribing...");
@@ -114,9 +113,7 @@ impl AppController {
             Ok(audio) => audio,
             Err(err) => {
                 tracing::error!(%err, "recording failed");
-                crate::overlay::set_text("录音失败");
-                self.set_status("Recording failed");
-                self.busy.store(false, Ordering::SeqCst);
+                self.fail("录音失败", "Recording failed");
                 return;
             }
         };

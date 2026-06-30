@@ -6,11 +6,15 @@ use crate::{
 };
 use parking_lot::Mutex;
 use std::sync::{mpsc, Arc, OnceLock};
+use std::time::Duration;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegSetValueExW, HKEY_CURRENT_USER,
     KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
+};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_CAPITAL,
 };
 use windows_sys::Win32::UI::Shell::{
     ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
@@ -28,6 +32,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 const CLASS_NAME: &str = "JustSayHiddenWindow";
 const TRAY_UID: u32 = 1;
 const WM_TRAY: u32 = WM_APP + 1;
+const PRESS_TO_TALK_TRIGGER_DELAY: Duration = Duration::from_millis(300);
 
 const CMD_LANG_EN: u32 = 1001;
 const CMD_LANG_ZH_CN: u32 = 1002;
@@ -63,10 +68,78 @@ pub fn run(controller: Arc<AppController>) -> anyhow::Result<()> {
     std::thread::spawn({
         let controller = controller.clone();
         move || {
+            let hotkey_state = Arc::new(Mutex::new(PressToTalkState::default()));
             for event in rx {
                 match event {
-                    HotkeyEvent::Pressed => controller.start_recording(),
-                    HotkeyEvent::Released => controller.stop_recording(),
+                    HotkeyEvent::Pressed => {
+                        let generation = {
+                            let mut state = hotkey_state.lock();
+                            if state.held {
+                                continue;
+                            }
+                            state.held = true;
+                            state.stop_requested = false;
+                            state.trigger_fired = false;
+                            state.generation = state.generation.wrapping_add(1);
+                            state.generation
+                        };
+                        let delayed_state = hotkey_state.clone();
+                        let delayed_controller = controller.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(PRESS_TO_TALK_TRIGGER_DELAY);
+                            {
+                                let mut state = delayed_state.lock();
+                                if !state.held || state.generation != generation || state.recording
+                                {
+                                    return;
+                                }
+                                state.recording = true;
+                                state.stop_requested = false;
+                                state.trigger_fired = true;
+                            }
+                            let started = delayed_controller.start_recording();
+                            let should_stop_after_start = {
+                                let mut state = delayed_state.lock();
+                                if !started {
+                                    state.recording = false;
+                                    state.stop_requested = false;
+                                    false
+                                } else {
+                                    let should_stop = !state.held
+                                        || state.generation != generation
+                                        || state.stop_requested;
+                                    if should_stop {
+                                        state.recording = false;
+                                        state.stop_requested = false;
+                                    }
+                                    should_stop
+                                }
+                            };
+                            if should_stop_after_start {
+                                delayed_controller.stop_recording();
+                            }
+                        });
+                    }
+                    HotkeyEvent::Released => {
+                        let (should_stop, should_replay_caps_lock) = {
+                            let mut state = hotkey_state.lock();
+                            state.held = false;
+                            state.generation = state.generation.wrapping_add(1);
+                            let recording = state.recording;
+                            let should_replay_caps_lock = !recording
+                                && !state.trigger_fired
+                                && is_caps_lock_hotkey(&controller.config().hotkey);
+                            state.recording = false;
+                            state.stop_requested = recording;
+                            state.trigger_fired = false;
+                            (recording, should_replay_caps_lock)
+                        };
+                        if should_stop {
+                            controller.stop_recording();
+                        } else if should_replay_caps_lock {
+                            replay_caps_lock_tap();
+                        }
+                    }
                 }
             }
         }
@@ -455,6 +528,55 @@ fn stats_menu_lines(language: &Language, stats: &crate::app::AppStats) -> Vec<St
         ));
     }
     lines
+}
+
+#[derive(Default)]
+struct PressToTalkState {
+    held: bool,
+    recording: bool,
+    stop_requested: bool,
+    trigger_fired: bool,
+    generation: u64,
+}
+
+fn is_caps_lock_hotkey(hotkey: &Hotkey) -> bool {
+    matches!(hotkey, Hotkey::CapsLock)
+}
+
+fn replay_caps_lock_tap() {
+    let mut inputs = [
+        key_input(VK_CAPITAL, 0),
+        key_input(VK_CAPITAL, KEYEVENTF_KEYUP),
+    ];
+    let sent = unsafe {
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_mut_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        )
+    };
+    if sent != inputs.len() as u32 {
+        tracing::warn!(
+            sent,
+            expected = inputs.len(),
+            "failed to replay CapsLock tap"
+        );
+    }
+}
+
+fn key_input(vk: u16, flags: u32) -> INPUT {
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
 }
 
 fn truncate_menu_text(value: &str, max_chars: usize) -> String {
